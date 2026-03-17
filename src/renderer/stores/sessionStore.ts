@@ -70,6 +70,7 @@ interface State {
   addAttachments: (attachments: Attachment[]) => void
   removeAttachment: (attachmentId: string) => void
   clearAttachments: () => void
+  handleFinderFolder: (folder: string) => void
   handleNormalizedEvent: (tabId: string, event: NormalizedEvent) => void
   handleStatusChange: (tabId: string, newStatus: string, oldStatus: string) => void
   handleError: (tabId: string, error: EnrichedError) => void
@@ -93,7 +94,20 @@ async function playNotificationIfHidden(): Promise<void> {
   } catch {}
 }
 
+// ─── Persist last chosen working directory across launches ───
+
+const LAST_DIR_KEY = 'clui:lastWorkingDirectory'
+
+function getLastWorkingDirectory(): string | null {
+  try { return localStorage.getItem(LAST_DIR_KEY) } catch { return null }
+}
+
+function saveLastWorkingDirectory(dir: string): void {
+  try { localStorage.setItem(LAST_DIR_KEY, dir) } catch {}
+}
+
 function makeLocalTab(): TabState {
+  const savedDir = getLastWorkingDirectory()
   return {
     id: crypto.randomUUID(),
     claudeSessionId: null,
@@ -113,8 +127,8 @@ function makeLocalTab(): TabState {
     sessionSkills: [],
     sessionVersion: null,
     queuedPrompts: [],
-    workingDirectory: '~',
-    hasChosenDirectory: false,
+    workingDirectory: savedDir || '~',
+    hasChosenDirectory: !!savedDir,
     additionalDirs: [],
   }
 }
@@ -468,6 +482,7 @@ export const useSessionStore = create<State>((set, get) => ({
   setBaseDirectory: (dir) => {
     const { activeTabId } = get()
     window.clui.resetTabSession(activeTabId)
+    saveLastWorkingDirectory(dir)
     set((s) => ({
       tabs: s.tabs.map((t) =>
         t.id === activeTabId
@@ -597,6 +612,36 @@ export const useSessionStore = create<State>((set, get) => ({
         elapsedMs: 0,
         toolCallCount: 0,
       })
+    })
+  },
+
+  // ─── Finder folder detection ───
+
+  handleFinderFolder: (folder) => {
+    const { activeTabId, createTab } = get()
+    const activeTab = get().tabs.find((t) => t.id === activeTabId)
+
+    // Active tab has no messages — update it in place
+    if (!activeTab || activeTab.messages.length === 0) {
+      set((s) => ({
+        tabs: s.tabs.map((t) => {
+          if (t.id !== activeTabId) return t
+          saveLastWorkingDirectory(folder)
+          return { ...t, workingDirectory: folder, hasChosenDirectory: true }
+        }),
+      }))
+      return
+    }
+
+    // Active tab has a conversation — open a new tab with the detected folder
+    createTab().then((tabId) => {
+      set((s) => ({
+        tabs: s.tabs.map((t) => {
+          if (t.id !== tabId) return t
+          saveLastWorkingDirectory(folder)
+          return { ...t, workingDirectory: folder, hasChosenDirectory: true }
+        }),
+      }))
     })
   },
 

@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, screen, globalShortcut, Tray, Menu
 import { join } from 'path'
 import { existsSync, readdirSync, statSync, createReadStream } from 'fs'
 import { createInterface } from 'readline'
+import { execFile } from 'child_process'
 import { homedir } from 'os'
 import { ControlPlane } from './claude/control-plane'
 import { ensureSkills, type SkillStatus } from './skills/installer'
@@ -74,6 +75,47 @@ function scheduleToggleSnapshots(toggleId: number, phase: 'show' | 'hide'): void
   }
 }
 
+
+// ─── Finder folder detection (macOS) ───
+
+function detectFinderFolder(): void {
+  if (process.platform !== 'darwin') return
+
+  const script = `
+tell application "System Events"
+  set frontApp to name of first application process whose frontmost is true
+end tell
+if frontApp is "Finder" then
+  tell application "Finder"
+    if (count of windows) > 0 then
+      -- Prefer a selected folder over the window's current directory
+      set sel to selection
+      if (count of sel) > 0 then
+        set firstItem to item 1 of sel
+        if class of firstItem is folder then
+          return POSIX path of (firstItem as alias)
+        end if
+      end if
+      set folderTarget to (target of front window) as alias
+      return POSIX path of folderTarget
+    end if
+  end tell
+end if
+return ""
+`
+
+  execFile('/usr/bin/osascript', ['-e', script], { timeout: 3000 }, (err, stdout) => {
+    if (err) {
+      log(`Finder folder detection failed: ${err.message}`)
+      return
+    }
+    const folder = stdout.trim()
+    if (folder) {
+      log(`Finder folder detected: ${folder}`)
+      broadcast(IPC.FINDER_FOLDER_DETECTED, folder)
+    }
+  })
+}
 
 // ─── Wire ControlPlane events → renderer ───
 
@@ -184,6 +226,9 @@ function toggleWindow(source = 'unknown'): void {
       log(`[spaces] toggle#${toggleId} move-to-display id=${display.id}`)
       snapshotWindowState(`toggle#${toggleId} pre-show`)
     }
+    // Detect Finder folder BEFORE showing — once the window appears,
+    // the frontmost app may change and the AppleScript check will miss Finder.
+    detectFinderFolder()
     // As an accessory app (app.dock.hide), show() + focus gives keyboard
     // without deactivating the active app — hover preserved everywhere.
     mainWindow.show()
@@ -894,7 +939,7 @@ app.whenReady().then(() => {
   // Fallback: Cmd+Shift+K kept as secondary shortcut
   const registered = globalShortcut.register('Alt+Space', () => toggleWindow('shortcut Alt+Space'))
   if (!registered) {
-    log('Alt+Space shortcut registration failed — macOS input sources may claim it')
+    log('Alt+Space shortcut registration failed — another app may have claimed it')
   }
   globalShortcut.register('CommandOrControl+Shift+K', () => toggleWindow('shortcut Cmd/Ctrl+Shift+K'))
 
