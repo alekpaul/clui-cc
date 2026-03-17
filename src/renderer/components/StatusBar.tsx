@@ -133,6 +133,8 @@ function ModelPicker() {
 function PermissionModePicker() {
   const permissionMode = useSessionStore((s) => s.permissionMode)
   const setPermissionMode = useSessionStore((s) => s.setPermissionMode)
+  const planMode = useSessionStore((s) => s.planMode)
+  const setPlanMode = useSessionStore((s) => s.setPlanMode)
   const popoverLayer = usePopoverLayer()
   const colors = useColors()
 
@@ -167,13 +169,17 @@ function PermissionModePicker() {
     setOpen((o) => !o)
   }
 
-  const isSkip = permissionMode === 'skip'
+  const isSkip = !planMode && permissionMode === 'skip'
+  const isPlan = planMode
 
-  const triggerIcon = isSkip
-    ? <Warning size={11} weight="fill" style={{ color: '#ef4444' }} />
-    : <ShieldCheck size={11} weight={permissionMode === 'auto' ? 'fill' : 'regular'} />
+  const triggerIcon = isPlan
+    ? <Notepad size={11} weight="fill" style={{ color: '#22c55e' }} />
+    : isSkip
+      ? <Warning size={11} weight="fill" style={{ color: '#ef4444' }} />
+      : <ShieldCheck size={11} weight={permissionMode === 'auto' ? 'fill' : 'regular'} />
 
-  const triggerLabel = permissionMode === 'ask' ? 'Ask' : permissionMode === 'auto' ? 'Auto' : 'Skip'
+  const triggerLabel = isPlan ? 'Plan' : permissionMode === 'ask' ? 'Ask' : permissionMode === 'auto' ? 'Auto' : 'Skip'
+  const triggerColor = isPlan ? '#22c55e' : isSkip ? '#ef4444' : colors.textTertiary
 
   return (
     <>
@@ -182,7 +188,7 @@ function PermissionModePicker() {
         onClick={handleToggle}
         className="flex items-center gap-0.5 text-[10px] rounded-full px-1.5 py-0.5 transition-colors"
         style={{
-          color: isSkip ? '#ef4444' : colors.textTertiary,
+          color: triggerColor,
           cursor: 'pointer',
         }}
         title="Permission mode (global)"
@@ -216,85 +222,75 @@ function PermissionModePicker() {
         >
           <div className="py-1">
             <button
-              onClick={() => { setPermissionMode('ask'); setOpen(false) }}
+              onClick={() => { setPlanMode(true); setOpen(false) }}
               className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] transition-colors"
               style={{
-                color: permissionMode === 'ask' ? colors.textPrimary : colors.textSecondary,
-                fontWeight: permissionMode === 'ask' ? 600 : 400,
+                color: isPlan ? '#22c55e' : colors.textSecondary,
+                fontWeight: isPlan ? 600 : 400,
+              }}
+            >
+              <span className="flex items-center gap-1.5">
+                <Notepad size={12} weight="fill" style={{ color: '#22c55e' }} />
+                Plan
+              </span>
+              {isPlan && <Check size={12} style={{ color: '#22c55e' }} />}
+            </button>
+
+            <div className="mx-2 my-0.5" style={{ height: 1, background: colors.popoverBorder }} />
+
+            <button
+              onClick={() => { setPlanMode(false); setPermissionMode('ask'); setOpen(false) }}
+              className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] transition-colors"
+              style={{
+                color: !isPlan && permissionMode === 'ask' ? colors.textPrimary : colors.textSecondary,
+                fontWeight: !isPlan && permissionMode === 'ask' ? 600 : 400,
               }}
             >
               <span className="flex items-center gap-1.5">
                 <ShieldCheck size={12} />
                 Ask
               </span>
-              {permissionMode === 'ask' && <Check size={12} style={{ color: colors.accent }} />}
+              {!isPlan && permissionMode === 'ask' && <Check size={12} style={{ color: colors.accent }} />}
             </button>
 
             <div className="mx-2 my-0.5" style={{ height: 1, background: colors.popoverBorder }} />
 
             <button
-              onClick={() => { setPermissionMode('auto'); setOpen(false) }}
+              onClick={() => { setPlanMode(false); setPermissionMode('auto'); setOpen(false) }}
               className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] transition-colors"
               style={{
-                color: permissionMode === 'auto' ? colors.textPrimary : colors.textSecondary,
-                fontWeight: permissionMode === 'auto' ? 600 : 400,
+                color: !isPlan && permissionMode === 'auto' ? colors.textPrimary : colors.textSecondary,
+                fontWeight: !isPlan && permissionMode === 'auto' ? 600 : 400,
               }}
             >
               <span className="flex items-center gap-1.5">
                 <ShieldCheck size={12} weight="fill" />
                 Auto
               </span>
-              {permissionMode === 'auto' && <Check size={12} style={{ color: colors.accent }} />}
+              {!isPlan && permissionMode === 'auto' && <Check size={12} style={{ color: colors.accent }} />}
             </button>
 
             <div className="mx-2 my-0.5" style={{ height: 1, background: colors.popoverBorder }} />
 
             <button
-              onClick={() => { setPermissionMode('skip'); setOpen(false) }}
+              onClick={() => { setPlanMode(false); setPermissionMode('skip'); setOpen(false) }}
               className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] transition-colors"
               style={{
-                color: permissionMode === 'skip' ? '#ef4444' : colors.textSecondary,
-                fontWeight: permissionMode === 'skip' ? 600 : 400,
+                color: !isPlan && permissionMode === 'skip' ? '#ef4444' : colors.textSecondary,
+                fontWeight: !isPlan && permissionMode === 'skip' ? 600 : 400,
               }}
             >
               <span className="flex items-center gap-1.5">
                 <Warning size={12} weight="fill" style={{ color: '#ef4444' }} />
                 Skip
               </span>
-              {permissionMode === 'skip' && <Check size={12} style={{ color: '#ef4444' }} />}
+              {!isPlan && permissionMode === 'skip' && <Check size={12} style={{ color: '#ef4444' }} />}
             </button>
           </div>
         </motion.div>,
         popoverLayer,
       )}
     </>
-  )
-}
-
-/* ─── Plan Mode Toggle (global — affects all tabs) ─── */
-
-function PlanModePicker() {
-  const planMode = useSessionStore((s) => s.planMode)
-  const setPlanMode = useSessionStore((s) => s.setPlanMode)
-  const colors = useColors()
-
-  const handleToggle = () => {
-    setPlanMode(!planMode)
-  }
-
-  return (
-    <button
-      onClick={handleToggle}
-      className="flex items-center gap-0.5 text-[10px] rounded-full px-1.5 py-0.5 transition-colors"
-      style={{
-        color: planMode ? colors.accent : colors.textTertiary,
-        cursor: 'pointer',
-      }}
-      title={planMode ? 'Plan mode ON — read-only tools only' : 'Plan mode OFF — all tools available'}
-    >
-      <Notepad size={11} weight={planMode ? 'fill' : 'regular'} />
-      {planMode ? 'Plan' : 'Act'}
-    </button>
   )
 }
 
@@ -484,10 +480,6 @@ export function StatusBar() {
         <span style={{ color: colors.textMuted, fontSize: 10 }}>|</span>
 
         <PermissionModePicker />
-
-        <span style={{ color: colors.textMuted, fontSize: 10 }}>|</span>
-
-        <PlanModePicker />
       </div>
 
       {/* Right — Open in CLI */}

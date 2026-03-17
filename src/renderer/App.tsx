@@ -121,7 +121,7 @@ export default function App() {
     if (e.button !== 0) return
     // Don't drag if clicking on an interactive element
     const el = e.target as HTMLElement
-    if (el.closest('button, input, textarea, select, a, [role="button"], [data-no-drag]')) return
+    if (el.closest('button, input, textarea, select, a, [role="button"], [data-no-drag], .prose-cloud, .conversation-selectable')) return
     e.preventDefault()
     let lastX = e.screenX
     let lastY = e.screenY
