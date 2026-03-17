@@ -30,8 +30,10 @@ interface State {
   staticInfo: StaticInfo | null
   /** User's preferred model override (null = use default) */
   preferredModel: string | null
-  /** Global permission mode: 'ask' shows cards, 'auto' auto-approves all tool calls */
-  permissionMode: 'ask' | 'auto'
+  /** Global permission mode: 'ask' shows cards, 'auto' auto-approves all tool calls, 'skip' dangerously skips all permissions */
+  permissionMode: 'ask' | 'auto' | 'skip'
+  /** Global plan mode: restricts Claude to read-only tools */
+  planMode: boolean
 
   // Marketplace state
   marketplaceOpen: boolean
@@ -46,7 +48,8 @@ interface State {
   // Actions
   initStaticInfo: () => Promise<void>
   setPreferredModel: (model: string | null) => void
-  setPermissionMode: (mode: 'ask' | 'auto') => void
+  setPermissionMode: (mode: 'ask' | 'auto' | 'skip') => void
+  setPlanMode: (enabled: boolean) => void
   createTab: () => Promise<string>
   selectTab: (tabId: string) => void
   closeTab: (tabId: string) => void
@@ -142,6 +145,7 @@ export const useSessionStore = create<State>((set, get) => ({
   staticInfo: null,
   preferredModel: null,
   permissionMode: 'ask',
+  planMode: false,
 
   // Marketplace
   marketplaceOpen: false,
@@ -175,6 +179,11 @@ export const useSessionStore = create<State>((set, get) => ({
   setPermissionMode: (mode) => {
     set({ permissionMode: mode })
     window.clui.setPermissionMode(mode)
+  },
+
+  setPlanMode: (enabled) => {
+    set({ planMode: enabled })
+    window.clui.setPlanMode(enabled)
   },
 
   createTab: async () => {

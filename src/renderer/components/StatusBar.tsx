@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Terminal, CaretDown, Check, FolderOpen, Plus, X, ShieldCheck } from '@phosphor-icons/react'
+import { Terminal, CaretDown, Check, FolderOpen, Plus, X, ShieldCheck, Warning, Notepad } from '@phosphor-icons/react'
 import { useSessionStore, AVAILABLE_MODELS } from '../stores/sessionStore'
 import { usePopoverLayer } from './PopoverLayer'
 import { useColors } from '../theme'
@@ -167,7 +167,13 @@ function PermissionModePicker() {
     setOpen((o) => !o)
   }
 
-  const isAuto = permissionMode === 'auto'
+  const isSkip = permissionMode === 'skip'
+
+  const triggerIcon = isSkip
+    ? <Warning size={11} weight="fill" style={{ color: '#ef4444' }} />
+    : <ShieldCheck size={11} weight={permissionMode === 'auto' ? 'fill' : 'regular'} />
+
+  const triggerLabel = permissionMode === 'ask' ? 'Ask' : permissionMode === 'auto' ? 'Auto' : 'Skip'
 
   return (
     <>
@@ -176,13 +182,13 @@ function PermissionModePicker() {
         onClick={handleToggle}
         className="flex items-center gap-0.5 text-[10px] rounded-full px-1.5 py-0.5 transition-colors"
         style={{
-          color: colors.textTertiary,
+          color: isSkip ? '#ef4444' : colors.textTertiary,
           cursor: 'pointer',
         }}
         title="Permission mode (global)"
       >
-        <ShieldCheck size={11} weight={isAuto ? 'fill' : 'regular'} />
-        {isAuto ? 'Auto' : 'Ask'}
+        {triggerIcon}
+        {triggerLabel}
         <CaretDown size={10} style={{ opacity: 0.6 }} />
       </button>
 
@@ -213,15 +219,15 @@ function PermissionModePicker() {
               onClick={() => { setPermissionMode('ask'); setOpen(false) }}
               className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] transition-colors"
               style={{
-                color: !isAuto ? colors.textPrimary : colors.textSecondary,
-                fontWeight: !isAuto ? 600 : 400,
+                color: permissionMode === 'ask' ? colors.textPrimary : colors.textSecondary,
+                fontWeight: permissionMode === 'ask' ? 600 : 400,
               }}
             >
               <span className="flex items-center gap-1.5">
                 <ShieldCheck size={12} />
                 Ask
               </span>
-              {!isAuto && <Check size={12} style={{ color: colors.accent }} />}
+              {permissionMode === 'ask' && <Check size={12} style={{ color: colors.accent }} />}
             </button>
 
             <div className="mx-2 my-0.5" style={{ height: 1, background: colors.popoverBorder }} />
@@ -230,21 +236,65 @@ function PermissionModePicker() {
               onClick={() => { setPermissionMode('auto'); setOpen(false) }}
               className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] transition-colors"
               style={{
-                color: isAuto ? colors.textPrimary : colors.textSecondary,
-                fontWeight: isAuto ? 600 : 400,
+                color: permissionMode === 'auto' ? colors.textPrimary : colors.textSecondary,
+                fontWeight: permissionMode === 'auto' ? 600 : 400,
               }}
             >
               <span className="flex items-center gap-1.5">
                 <ShieldCheck size={12} weight="fill" />
                 Auto
               </span>
-              {isAuto && <Check size={12} style={{ color: colors.accent }} />}
+              {permissionMode === 'auto' && <Check size={12} style={{ color: colors.accent }} />}
+            </button>
+
+            <div className="mx-2 my-0.5" style={{ height: 1, background: colors.popoverBorder }} />
+
+            <button
+              onClick={() => { setPermissionMode('skip'); setOpen(false) }}
+              className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] transition-colors"
+              style={{
+                color: permissionMode === 'skip' ? '#ef4444' : colors.textSecondary,
+                fontWeight: permissionMode === 'skip' ? 600 : 400,
+              }}
+            >
+              <span className="flex items-center gap-1.5">
+                <Warning size={12} weight="fill" style={{ color: '#ef4444' }} />
+                Skip
+              </span>
+              {permissionMode === 'skip' && <Check size={12} style={{ color: '#ef4444' }} />}
             </button>
           </div>
         </motion.div>,
         popoverLayer,
       )}
     </>
+  )
+}
+
+/* ─── Plan Mode Toggle (global — affects all tabs) ─── */
+
+function PlanModePicker() {
+  const planMode = useSessionStore((s) => s.planMode)
+  const setPlanMode = useSessionStore((s) => s.setPlanMode)
+  const colors = useColors()
+
+  const handleToggle = () => {
+    setPlanMode(!planMode)
+  }
+
+  return (
+    <button
+      onClick={handleToggle}
+      className="flex items-center gap-0.5 text-[10px] rounded-full px-1.5 py-0.5 transition-colors"
+      style={{
+        color: planMode ? colors.accent : colors.textTertiary,
+        cursor: 'pointer',
+      }}
+      title={planMode ? 'Plan mode ON — read-only tools only' : 'Plan mode OFF — all tools available'}
+    >
+      <Notepad size={11} weight={planMode ? 'fill' : 'regular'} />
+      {planMode ? 'Plan' : 'Act'}
+    </button>
   )
 }
 
@@ -434,6 +484,10 @@ export function StatusBar() {
         <span style={{ color: colors.textMuted, fontSize: 10 }}>|</span>
 
         <PermissionModePicker />
+
+        <span style={{ color: colors.textMuted, fontSize: 10 }}>|</span>
+
+        <PlanModePicker />
       </div>
 
       {/* Right — Open in CLI */}

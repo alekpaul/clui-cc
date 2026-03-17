@@ -71,8 +71,10 @@ export class ControlPlane extends EventEmitter {
   private permissionServer: PermissionServer
   /** Per-run tokens: requestId → runToken (for cleanup on exit/error) */
   private runTokens = new Map<string, string>()
-  /** Global permission mode: 'ask' shows cards, 'auto' auto-approves */
-  private permissionMode: 'ask' | 'auto' = 'ask'
+  /** Global permission mode: 'ask' shows cards, 'auto' auto-approves, 'skip' dangerously skips all */
+  private permissionMode: 'ask' | 'auto' | 'skip' = 'ask'
+  /** Plan mode: restrict to read-only tools (no edits, writes, bash) */
+  private planMode = false
   /** Resolves when the permission server is ready (or failed). Dispatch awaits this. */
   private hookServerReady: Promise<void>
 
@@ -107,9 +109,9 @@ export class ControlPlane extends EventEmitter {
 
       log(`Permission request [${questionId}]: tool=${toolRequest.tool_name} tab=${tabId.substring(0, 8)}… mode=${this.permissionMode}`)
 
-      // Auto mode: immediately allow without showing UI
-      if (this.permissionMode === 'auto') {
-        this.permissionServer.respondToPermission(questionId, 'allow', 'Auto mode')
+      // Auto/Skip mode: immediately allow without showing UI
+      if (this.permissionMode === 'auto' || this.permissionMode === 'skip') {
+        this.permissionServer.respondToPermission(questionId, 'allow', `${this.permissionMode} mode`)
         return
       }
 
@@ -482,9 +484,18 @@ export class ControlPlane extends EventEmitter {
    * Set global permission mode.
    * 'ask' = show permission cards, 'auto' = auto-approve all tool calls.
    */
-  setPermissionMode(mode: 'ask' | 'auto'): void {
+  setPermissionMode(mode: 'ask' | 'auto' | 'skip'): void {
     log(`Permission mode set to: ${mode}`)
     this.permissionMode = mode
+  }
+
+  /**
+   * Set global plan mode.
+   * When enabled, runs are restricted to read-only tools.
+   */
+  setPlanMode(enabled: boolean): void {
+    log(`Plan mode set to: ${enabled}`)
+    this.planMode = enabled
   }
 
   closeTab(tabId: string): void {
@@ -595,6 +606,11 @@ export class ControlPlane extends EventEmitter {
     // Use stored session ID for resume if available and not overridden
     if (tab.claudeSessionId && !options.sessionId) {
       options = { ...options, sessionId: tab.claudeSessionId }
+    }
+
+    // Inject plan mode flag
+    if (this.planMode) {
+      options = { ...options, planMode: true }
     }
 
     // Per-run token lifecycle: register run, generate per-run settings file

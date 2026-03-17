@@ -470,12 +470,17 @@ ipcMain.handle(IPC.CLOSE_TAB, (_event, tabId: string) => {
 })
 
 ipcMain.on(IPC.SET_PERMISSION_MODE, (_event, mode: string) => {
-  if (mode !== 'ask' && mode !== 'auto') {
+  if (mode !== 'ask' && mode !== 'auto' && mode !== 'skip') {
     log(`IPC SET_PERMISSION_MODE: invalid mode "${mode}" — ignoring`)
     return
   }
   log(`IPC SET_PERMISSION_MODE: ${mode}`)
   controlPlane.setPermissionMode(mode)
+})
+
+ipcMain.on(IPC.SET_PLAN_MODE, (_event, enabled: boolean) => {
+  log(`IPC SET_PLAN_MODE: ${enabled}`)
+  controlPlane.setPlanMode(enabled)
 })
 
 ipcMain.handle(IPC.RESPOND_PERMISSION, (_event, { tabId, questionId, optionId }: { tabId: string; questionId: string; optionId: string }) => {
