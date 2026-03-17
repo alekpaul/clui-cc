@@ -13,6 +13,7 @@ export function useClaudeEvents() {
   const handleNormalizedEvent = useSessionStore((s) => s.handleNormalizedEvent)
   const handleStatusChange = useSessionStore((s) => s.handleStatusChange)
   const handleError = useSessionStore((s) => s.handleError)
+  const handleFinderFolder = useSessionStore((s) => s.handleFinderFolder)
 
   // RAF batching for text_chunk events
   const chunkBufferRef = useRef<Map<string, string>>(new Map())
@@ -61,15 +62,20 @@ export function useClaudeEvents() {
       }
     })
 
+    const unsubFinder = window.clui.onFinderFolderDetected((folder) => {
+      handleFinderFolder(folder)
+    })
+
     return () => {
       unsubEvent()
       unsubStatus()
       unsubError()
       unsubSkill()
+      unsubFinder()
       if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
       chunkBufferRef.current.clear()
     }
-  }, [handleNormalizedEvent, handleStatusChange, handleError])
+  }, [handleNormalizedEvent, handleStatusChange, handleError, handleFinderFolder])
 
   // Note: window.clui.start() is called via sessionStore.initStaticInfo() in App.tsx.
   // No duplicate call needed here.

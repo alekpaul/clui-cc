@@ -36,12 +36,15 @@ export interface CluiAPI {
 
   // ─── Window management ───
   resizeHeight(height: number): void
-  setWindowWidth(width: number): void
+  setWindowWidth(wide: boolean): void
   animateHeight(from: number, to: number, durationMs: number): Promise<void>
   hideWindow(): void
   isVisible(): Promise<boolean>
   /** OS-level click-through for transparent window regions */
   setIgnoreMouseEvents(ignore: boolean, options?: { forward?: boolean }): void
+  dragWindow(deltaX: number, deltaY: number): void
+  dragEnd(): void
+  presizeWindow(targetHeight: number): Promise<void>
 
   // ─── Event listeners (main → renderer) ───
   onEvent(callback: (tabId: string, event: NormalizedEvent) => void): () => void
@@ -49,6 +52,7 @@ export interface CluiAPI {
   onError(callback: (tabId: string, error: EnrichedError) => void): () => void
   onSkillStatus(callback: (status: { name: string; state: string; error?: string; reason?: string }) => void): () => void
   onWindowShown(callback: () => void): () => void
+  onFinderFolderDetected(callback: (folder: string) => void): () => void
 }
 
 const api: CluiAPI = {
@@ -98,7 +102,11 @@ const api: CluiAPI = {
   isVisible: () => ipcRenderer.invoke(IPC.IS_VISIBLE),
   setIgnoreMouseEvents: (ignore, options) =>
     ipcRenderer.send(IPC.SET_IGNORE_MOUSE_EVENTS, ignore, options || {}),
-  setWindowWidth: (width) => ipcRenderer.send(IPC.SET_WINDOW_WIDTH, width),
+  dragWindow: (deltaX: number, deltaY: number) =>
+    ipcRenderer.send(IPC.START_WINDOW_DRAG, deltaX, deltaY),
+  dragEnd: () => ipcRenderer.send(IPC.DRAG_END),
+  presizeWindow: (targetHeight: number) => ipcRenderer.invoke(IPC.PRESIZE_WINDOW, targetHeight),
+  setWindowWidth: (wide) => ipcRenderer.send(IPC.SET_WINDOW_WIDTH, wide),
 
   // ─── Event listeners ───
   onEvent: (callback) => {
@@ -137,6 +145,12 @@ const api: CluiAPI = {
     const handler = () => callback()
     ipcRenderer.on(IPC.WINDOW_SHOWN, handler)
     return () => ipcRenderer.removeListener(IPC.WINDOW_SHOWN, handler)
+  },
+
+  onFinderFolderDetected: (callback) => {
+    const handler = (_e: Electron.IpcRendererEvent, folder: string) => callback(folder)
+    ipcRenderer.on(IPC.FINDER_FOLDER_DETECTED, handler)
+    return () => ipcRenderer.removeListener(IPC.FINDER_FOLDER_DETECTED, handler)
   },
 }
 

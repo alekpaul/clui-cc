@@ -353,6 +353,7 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
   setExpandedUI: (expanded) => {
     set({ expandedUI: expanded })
     saveSettings({ themeMode: get().themeMode, soundEnabled: get().soundEnabled, expandedUI: expanded })
+    window.clui.setWindowWidth(expanded)
   },
   setSystemTheme: (isDark) => {
     set({ _systemIsDark: isDark })

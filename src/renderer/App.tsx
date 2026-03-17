@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback } from 'react'
+import React, { useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Paperclip, Camera, HeadCircuit } from '@phosphor-icons/react'
 import { TabStrip } from './components/TabStrip'
@@ -43,10 +43,13 @@ export default function App() {
       const homeDir = useSessionStore.getState().staticInfo?.homePath || '~'
       const tab = useSessionStore.getState().tabs[0]
       if (tab) {
-        // Set working directory to home by default (user hasn't chosen yet)
-        useSessionStore.setState((s) => ({
-          tabs: s.tabs.map((t, i) => (i === 0 ? { ...t, workingDirectory: homeDir, hasChosenDirectory: false } : t)),
-        }))
+        // If the tab already has a saved directory (from localStorage), keep it;
+        // otherwise fall back to the user's home directory.
+        if (!tab.hasChosenDirectory) {
+          useSessionStore.setState((s) => ({
+            tabs: s.tabs.map((t, i) => (i === 0 ? { ...t, workingDirectory: homeDir, hasChosenDirectory: false } : t)),
+          }))
+        }
         window.clui.createTab().then(({ tabId }) => {
           useSessionStore.setState((s) => ({
             tabs: s.tabs.map((t, i) => (i === 0 ? { ...t, id: tabId } : t)),
@@ -114,12 +117,41 @@ export default function App() {
     addAttachments(files)
   }, [addAttachments])
 
+  const handleDragMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return
+    // Don't drag if clicking on an interactive element
+    const el = e.target as HTMLElement
+    if (el.closest('button, input, textarea, select, a, [role="button"], [data-no-drag]')) return
+    e.preventDefault()
+    let lastX = e.screenX
+    let lastY = e.screenY
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.screenX - lastX
+      const dy = ev.screenY - lastY
+      lastX = ev.screenX
+      lastY = ev.screenY
+      window.clui.dragWindow(dx, dy)
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      window.clui.dragEnd()
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [])
+
+  const contentRef = useRef<HTMLDivElement>(null)
+
   return (
     <PopoverLayerProvider>
-      <div className="flex flex-col justify-end h-full" style={{ background: 'transparent' }}>
+      <div
+        className="flex flex-col justify-end h-full"
+        style={{ background: 'transparent', outline: '2px dashed rgba(255,0,0,0.5)', outlineOffset: '-2px' }}
+      >
 
         {/* ─── 460px content column, centered. Circles overflow left. ─── */}
-        <div style={{ width: contentWidth, position: 'relative', margin: '0 auto', transition: 'width 0.26s cubic-bezier(0.4, 0, 0.1, 1)' }}>
+        <div ref={contentRef} style={{ width: contentWidth, position: 'relative', margin: '0 auto', transition: 'width 0.26s cubic-bezier(0.4, 0, 0.1, 1)' }}>
 
           <AnimatePresence initial={false}>
             {marketplaceOpen && (
@@ -163,7 +195,8 @@ export default function App() {
           */}
           <motion.div
             data-clui-ui
-            className="overflow-hidden flex flex-col drag-region"
+            className="overflow-hidden flex flex-col"
+            onMouseDown={handleDragMouseDown}
             animate={{
               width: isExpanded ? cardExpandedWidth : cardCollapsedWidth,
               marginBottom: isExpanded ? 10 : -14,

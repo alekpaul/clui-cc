@@ -227,9 +227,16 @@ export const useSessionStore = create<State>((set, get) => ({
     }
   },
 
-  toggleExpanded: () => {
+  toggleExpanded: async () => {
     const { activeTabId, isExpanded } = get()
     const willExpand = !isExpanded
+
+    // Pre-size window before expand animation so content isn't clipped
+    // 120 top padding + ~45 tabs + ~400 body + ~55 input + ~20 bottom + margins
+    if (willExpand) {
+      await window.clui.presizeWindow(700)
+    }
+
     set((s) => ({
       isExpanded: willExpand,
       marketplaceOpen: false,

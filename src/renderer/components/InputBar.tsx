@@ -30,6 +30,7 @@ export function InputBar() {
   const measureRef = useRef<HTMLTextAreaElement | null>(null)
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
   const chunksRef = useRef<Blob[]>([])
+  const streamRef = useRef<MediaStream | null>(null)
 
   const sendMessage = useSessionStore((s) => s.sendMessage)
   const clearTab = useSessionStore((s) => s.clearTab)
@@ -364,6 +365,7 @@ export function InputBar() {
     }
     recorder.onerror = () => { stream.getTracks().forEach((t) => t.stop()); setVoiceError('Recording failed.'); setVoiceState('idle') }
     mediaRecorderRef.current = recorder
+    streamRef.current = stream
     setVoiceState('recording')
     recorder.start()
   }, [])
@@ -439,6 +441,7 @@ export function InputBar() {
                 onToggle={handleVoiceToggle}
                 onCancel={cancelRecording}
                 onStop={stopRecording}
+                stream={streamRef.current}
               />
               <AnimatePresence>
                 {canSend && voiceState !== 'recording' && (
@@ -497,6 +500,7 @@ export function InputBar() {
                 onToggle={handleVoiceToggle}
                 onCancel={cancelRecording}
                 onStop={stopRecording}
+                stream={streamRef.current}
               />
               <AnimatePresence>
                 {canSend && voiceState !== 'recording' && (
@@ -530,13 +534,14 @@ export function InputBar() {
 
 // ─── Voice Buttons (extracted to avoid duplication) ───
 
-function VoiceButtons({ voiceState, isConnecting, colors, onToggle, onCancel, onStop }: {
+function VoiceButtons({ voiceState, isConnecting, colors, onToggle, onCancel, onStop, stream }: {
   voiceState: VoiceState
   isConnecting: boolean
   colors: ReturnType<typeof useColors>
   onToggle: () => void
   onCancel: () => void
   onStop: () => void
+  stream: MediaStream | null
 }) {
   return (
     <AnimatePresence mode="wait">
@@ -558,6 +563,7 @@ function VoiceButtons({ voiceState, isConnecting, colors, onToggle, onCancel, on
           >
             <X size={15} weight="bold" />
           </button>
+          <SoundWave stream={stream} color={colors.accent} />
           <button
             onMouseDown={(e) => e.preventDefault()}
             onClick={onStop}
@@ -597,6 +603,67 @@ function VoiceButtons({ voiceState, isConnecting, colors, onToggle, onCancel, on
       )}
     </AnimatePresence>
   )
+}
+
+// ─── Sound wave visualizer ───
+
+function SoundWave({ stream, color }: { stream: MediaStream | null; color: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const animRef = useRef<number>(0)
+
+  useEffect(() => {
+    if (!stream || !canvasRef.current) return
+    const canvas = canvasRef.current
+    const dpr = window.devicePixelRatio || 1
+    const cssW = 40
+    const cssH = 24
+    canvas.width = cssW * dpr
+    canvas.height = cssH * dpr
+    canvas.style.width = `${cssW}px`
+    canvas.style.height = `${cssH}px`
+    const ctx = canvas.getContext('2d')!
+    ctx.scale(dpr, dpr)
+
+    const audioCtx = new AudioContext()
+    const source = audioCtx.createMediaStreamSource(stream)
+    const analyser = audioCtx.createAnalyser()
+    analyser.fftSize = 64
+    source.connect(analyser)
+    const data = new Uint8Array(analyser.frequencyBinCount)
+
+    const draw = () => {
+      animRef.current = requestAnimationFrame(draw)
+      analyser.getByteFrequencyData(data)
+      ctx.clearRect(0, 0, cssW, cssH)
+
+      const barCount = 5
+      const barWidth = 3
+      const gap = 4
+      const totalW = barCount * barWidth + (barCount - 1) * gap
+      const startX = (cssW - totalW) / 2
+
+      for (let i = 0; i < barCount; i++) {
+        const idx = Math.floor((i / barCount) * data.length * 0.6) + 1
+        const v = data[idx] / 255
+        const barH = Math.max(4, v * (cssH - 4))
+        const x = startX + i * (barWidth + gap)
+        const y = (cssH - barH) / 2
+        ctx.fillStyle = color
+        ctx.beginPath()
+        ctx.roundRect(x, y, barWidth, barH, 1.5)
+        ctx.fill()
+      }
+    }
+    draw()
+
+    return () => {
+      cancelAnimationFrame(animRef.current)
+      source.disconnect()
+      audioCtx.close()
+    }
+  }, [stream, color])
+
+  return <canvas ref={canvasRef} style={{ opacity: 0.9 }} />
 }
 
 // ─── Audio conversion: WebM blob → WAV base64 ───

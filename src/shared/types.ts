@@ -334,12 +334,18 @@ export const IPC = {
   ERROR: 'clui:error',
   RATE_LIMIT: 'clui:rate-limit',
 
+  // Finder folder detection (macOS)
+  FINDER_FOLDER_DETECTED: 'clui:finder-folder-detected',
+
   // Window management
   RESIZE_HEIGHT: 'clui:resize-height',
   SET_WINDOW_WIDTH: 'clui:set-window-width',
   HIDE_WINDOW: 'clui:hide-window',
   WINDOW_SHOWN: 'clui:window-shown',
   SET_IGNORE_MOUSE_EVENTS: 'clui:set-ignore-mouse-events',
+  START_WINDOW_DRAG: 'clui:start-window-drag',
+  DRAG_END: 'clui:drag-end',
+  PRESIZE_WINDOW: 'clui:presize-window',
   IS_VISIBLE: 'clui:is-visible',
 
   // Skill provisioning (main → renderer)

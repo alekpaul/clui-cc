@@ -23,15 +23,19 @@ let tray: Tray | null = null
 let screenshotCounter = 0
 let toggleSequence = 0
 
+// ─── User-moved window position (resets on relaunch) ───
+let userPosition: { x: number; y: number } | null = null
+
 // Feature flag: enable PTY interactive permissions transport
 const INTERACTIVE_PTY = process.env.CLUI_INTERACTIVE_PERMISSIONS_PTY === '1'
 
 const controlPlane = new ControlPlane(INTERACTIVE_PTY)
 
-// Keep native width fixed to avoid renderer animation vs setBounds race.
-// The UI itself still launches in compact mode; extra width is transparent/click-through.
-const BAR_WIDTH = 1040
-const PILL_HEIGHT = 720  // Fixed native window height — extra room for expanded UI + shadow buffers
+// Window width: compact by default, expanded when expandedUI toggle is on.
+const COMPACT_WIDTH = 820
+const EXPANDED_WIDTH = 1040
+let currentWidth = COMPACT_WIDTH
+const PILL_HEIGHT = 720  // Initial height — dynamically resized by renderer via RESIZE_HEIGHT IPC
 const PILL_BOTTOM_MARGIN = 24
 
 // ─── Broadcast to renderer ───
@@ -139,11 +143,11 @@ function createWindow(): void {
   const { width: screenWidth, height: screenHeight } = display.workAreaSize
   const { x: dx, y: dy } = display.workArea
 
-  const x = dx + Math.round((screenWidth - BAR_WIDTH) / 2)
+  const x = dx + Math.round((screenWidth - currentWidth) / 2)
   const y = dy + screenHeight - PILL_HEIGHT - PILL_BOTTOM_MARGIN
 
   mainWindow = new BrowserWindow({
-    width: BAR_WIDTH,
+    width: currentWidth,
     height: PILL_HEIGHT,
     x,
     y,
@@ -182,6 +186,14 @@ function createWindow(): void {
     }
   })
 
+  // ─── Track user-dragged position & clamp to screen bounds ───
+  // Clamp only runs after drag ends (triggered via IPC), not during drag.
+  mainWindow.on('moved', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    const bounds = mainWindow.getBounds()
+    userPosition = { x: bounds.x, y: bounds.y }
+  })
+
   let forceQuit = false
   app.on('before-quit', () => { forceQuit = true })
   mainWindow.on('close', (e) => {
@@ -211,17 +223,28 @@ function toggleWindow(source = 'unknown'): void {
     mainWindow.hide()
     if (SPACES_DEBUG) scheduleToggleSnapshots(toggleId, 'hide')
   } else {
-    // Position on the display where the cursor currently is (not always primary)
-    const cursor = screen.getCursorScreenPoint()
-    const display = screen.getDisplayNearestPoint(cursor)
-    const { width: sw, height: sh } = display.workAreaSize
-    const { x: dx, y: dy } = display.workArea
-    mainWindow.setBounds({
-      x: dx + Math.round((sw - BAR_WIDTH) / 2),
-      y: dy + sh - PILL_HEIGHT - PILL_BOTTOM_MARGIN,
-      width: BAR_WIDTH,
-      height: PILL_HEIGHT,
-    })
+    const currentHeight = mainWindow.getBounds().height || PILL_HEIGHT
+    if (userPosition) {
+      // Restore user-dragged position, keep current height
+      mainWindow.setBounds({
+        x: userPosition.x,
+        y: userPosition.y,
+        width: currentWidth,
+        height: currentHeight,
+      })
+    } else {
+      // Default: center-bottom on the display where the cursor is
+      const cursor = screen.getCursorScreenPoint()
+      const display = screen.getDisplayNearestPoint(cursor)
+      const { width: sw, height: sh } = display.workAreaSize
+      const { x: dx, y: dy } = display.workArea
+      mainWindow.setBounds({
+        x: dx + Math.round((sw - currentWidth) / 2),
+        y: dy + sh - currentHeight - PILL_BOTTOM_MARGIN,
+        width: currentWidth,
+        height: currentHeight,
+      })
+    }
     if (SPACES_DEBUG) {
       log(`[spaces] toggle#${toggleId} move-to-display id=${display.id}`)
       snapshotWindowState(`toggle#${toggleId} pre-show`)
@@ -239,19 +262,101 @@ function toggleWindow(source = 'unknown'): void {
 }
 
 // ─── Resize ───
-// Fixed-height mode: ignore renderer resize events to prevent jank.
-// The native window stays at PILL_HEIGHT; all expand/collapse happens inside the renderer.
+// Dynamic height: renderer reports content height, we resize keeping bottom anchored.
 
 ipcMain.on(IPC.RESIZE_HEIGHT, () => {
-  // No-op — fixed height window, no dynamic resize
+  // No-op — fixed height window
 })
 
-ipcMain.on(IPC.SET_WINDOW_WIDTH, () => {
-  // No-op — native width is fixed to keep expand/collapse animation smooth.
+// Pre-size window before expand animation: grow window, clamp to screen, then resolve.
+ipcMain.handle(IPC.PRESIZE_WINDOW, (_e, targetHeight: number) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const bounds = mainWindow.getBounds()
+  const h = Math.max(100, Math.round(targetHeight))
+  if (h <= bounds.height) return // shrinking doesn't need presize
+
+  // Grow upward (anchor bottom)
+  const deltaH = h - bounds.height
+  let newY = bounds.y - deltaH
+  const newBottom = newY + h
+
+  // Clamp to screen
+  const display = screen.getDisplayNearestPoint({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 })
+  const wa = display.workArea
+
+  // If top goes above work area, push down
+  if (newY < wa.y) newY = wa.y
+  // If bottom goes below work area, push up
+  if (newY + h > wa.y + wa.height) newY = wa.y + wa.height - h
+  // Final clamp top
+  if (newY < wa.y) newY = wa.y
+
+  mainWindow.setBounds({ x: bounds.x, y: newY, width: bounds.width, height: h })
+  userPosition = { x: bounds.x, y: newY }
+})
+
+ipcMain.on(IPC.SET_WINDOW_WIDTH, (_e, wide: boolean) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const newWidth = wide ? EXPANDED_WIDTH : COMPACT_WIDTH
+  if (newWidth === currentWidth) return
+  currentWidth = newWidth
+  const bounds = mainWindow.getBounds()
+  // Center the width change
+  const deltaW = newWidth - bounds.width
+  mainWindow.setBounds({
+    x: bounds.x - Math.round(deltaW / 2),
+    y: bounds.y,
+    width: newWidth,
+    height: bounds.height,
+  })
 })
 
 ipcMain.handle(IPC.ANIMATE_HEIGHT, () => {
   // No-op — kept for API compat, animation handled purely in renderer
+})
+
+ipcMain.on(IPC.START_WINDOW_DRAG, (_e, deltaX: number, deltaY: number) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const [x, y] = mainWindow.getPosition()
+  mainWindow.setPosition(x + deltaX, y + deltaY)
+})
+
+ipcMain.on(IPC.DRAG_END, () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  const bounds = mainWindow.getBounds()
+  const display = screen.getDisplayNearestPoint({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 })
+  const wa = display.workArea
+
+  // Clamp so the window stays fully within the work area
+  const clamped = {
+    x: Math.max(wa.x, Math.min(bounds.x, wa.x + wa.width - bounds.width)),
+    y: Math.max(wa.y, Math.min(bounds.y, wa.y + wa.height - bounds.height)),
+  }
+
+  if (clamped.x === bounds.x && clamped.y === bounds.y) {
+    userPosition = { x: bounds.x, y: bounds.y }
+    return
+  }
+
+  // Smooth snap-back to nearest valid point
+  const startX = bounds.x
+  const startY = bounds.y
+  const steps = 8
+  let step = 0
+  const interval = setInterval(() => {
+    step++
+    if (!mainWindow || mainWindow.isDestroyed()) { clearInterval(interval); return }
+    const t = step / steps
+    const ease = t * (2 - t)
+    mainWindow.setPosition(
+      Math.round(startX + (clamped.x - startX) * ease),
+      Math.round(startY + (clamped.y - startY) * ease),
+    )
+    if (step >= steps) {
+      clearInterval(interval)
+      userPosition = { x: clamped.x, y: clamped.y }
+    }
+  }, 15)
 })
 
 ipcMain.on(IPC.HIDE_WINDOW, () => {
