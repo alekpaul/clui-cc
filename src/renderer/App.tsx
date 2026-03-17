@@ -147,7 +147,7 @@ export default function App() {
     <PopoverLayerProvider>
       <div
         className="flex flex-col justify-end h-full"
-        style={{ background: 'transparent', outline: '2px dashed rgba(255,0,0,0.5)', outlineOffset: '-2px' }}
+        style={{ background: 'transparent' }}
       >
 
         {/* ─── 460px content column, centered. Circles overflow left. ─── */}
