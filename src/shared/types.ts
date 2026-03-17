@@ -221,6 +221,8 @@ export interface RunOptions {
   hookSettingsPath?: string
   /** Extra directories to add via --add-dir (session-preserving) */
   addDirs?: string[]
+  /** Plan mode: restrict to read-only tools */
+  planMode?: boolean
 }
 
 // ─── Control Plane Types ───
@@ -314,6 +316,7 @@ export const IPC = {
   TAKE_SCREENSHOT: 'clui:take-screenshot',
   TRANSCRIBE_AUDIO: 'clui:transcribe-audio',
   PASTE_IMAGE: 'clui:paste-image',
+  PROCESS_DROPPED_FILES: 'clui:process-dropped-files',
   GET_DIAGNOSTICS: 'clui:get-diagnostics',
   RESPOND_PERMISSION: 'clui:respond-permission',
   INIT_SESSION: 'clui:init-session',
@@ -363,6 +366,9 @@ export const IPC = {
 
   // Permission mode
   SET_PERMISSION_MODE: 'clui:set-permission-mode',
+
+  // Plan mode
+  SET_PLAN_MODE: 'clui:set-plan-mode',
 
   // Legacy (kept for backward compat during migration)
   STREAM_EVENT: 'clui:stream-event',

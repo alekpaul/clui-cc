@@ -35,6 +35,19 @@ interface State {
   /** Global plan mode: restricts Claude to read-only tools */
   planMode: boolean
 
+  /** Global usage tracking for rate-limit indicators */
+  usageTracking: {
+    totalInputTokens: number
+    totalOutputTokens: number
+    totalCostUsd: number
+    /** Per-request rate limit (resets quickly) */
+    shortTermLimit: { resetsAt: number; type: string } | null
+    /** Long-term 4-hour sliding window limit */
+    longTermLimit: { resetsAt: number; type: string } | null
+    /** Token snapshots for computing usage rate over time */
+    usageHistory: Array<{ timestamp: number; outputTokens: number }>
+  }
+
   // Marketplace state
   marketplaceOpen: boolean
   marketplaceCatalog: CatalogPlugin[]
@@ -146,6 +159,14 @@ export const useSessionStore = create<State>((set, get) => ({
   preferredModel: null,
   permissionMode: 'ask',
   planMode: false,
+  usageTracking: {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCostUsd: 0,
+    shortTermLimit: null,
+    longTermLimit: null,
+    usageHistory: [],
+  },
 
   // Marketplace
   marketplaceOpen: false,
@@ -865,7 +886,34 @@ export const useSessionStore = create<State>((set, get) => ({
         return updated
       })
 
-      return { tabs }
+      // ─── Update global usage tracking (outside per-tab state) ───
+      let usageTracking = s.usageTracking
+      if (event.type === 'task_complete' && event.usage) {
+        const inTok = event.usage.input_tokens || 0
+        const outTok = event.usage.output_tokens || 0
+        const now = Date.now()
+        const fourHoursAgo = now - 4 * 60 * 60 * 1000
+        // Keep only last 4 hours of history
+        const trimmedHistory = usageTracking.usageHistory.filter((h) => h.timestamp > fourHoursAgo)
+        usageTracking = {
+          ...usageTracking,
+          totalInputTokens: usageTracking.totalInputTokens + inTok,
+          totalOutputTokens: usageTracking.totalOutputTokens + outTok,
+          totalCostUsd: usageTracking.totalCostUsd + event.costUsd,
+          usageHistory: [...trimmedHistory, { timestamp: now, outputTokens: outTok }],
+        }
+      }
+      if (event.type === 'rate_limit' && event.status !== 'allowed') {
+        const isLongTerm = event.rateLimitType?.includes('daily') || event.rateLimitType?.includes('long')
+        usageTracking = {
+          ...usageTracking,
+          ...(isLongTerm
+            ? { longTermLimit: { resetsAt: event.resetsAt, type: event.rateLimitType } }
+            : { shortTermLimit: { resetsAt: event.resetsAt, type: event.rateLimitType } }),
+        }
+      }
+
+      return { tabs, usageTracking }
     })
   },
 

@@ -55,6 +55,24 @@ const DEFAULT_ALLOWED_TOOLS = [
   ...SAFE_TOOLS,
 ]
 
+// Plan mode: only read-only tools allowed (no edits, writes, or bash execution).
+const PLAN_MODE_TOOLS = [
+  'Read', 'Glob', 'Grep', 'LS',
+  'TodoRead', 'TodoWrite',
+  'Agent', 'Task', 'TaskOutput',
+  'Notebook',
+  'WebSearch', 'WebFetch',
+]
+
+// System prompt appended in plan mode so Claude knows to plan, not execute.
+const PLAN_MODE_HINT = [
+  'IMPORTANT: You are in PLAN MODE. You must ONLY read, analyze, and plan.',
+  'Do NOT make any changes to files. Do NOT execute commands that modify state.',
+  'Your job is to research, analyze, and produce a structured plan or answer.',
+  'You have access to read-only tools only (Read, Glob, Grep, WebSearch, WebFetch).',
+  'If the user asks you to make changes, outline the steps as a plan instead of executing them.',
+].join('\n')
+
 function log(msg: string): void {
   _log('RunManager', msg)
 }
@@ -172,7 +190,11 @@ export class RunManager extends EventEmitter {
       }
     }
 
-    if (options.hookSettingsPath) {
+    if (options.planMode) {
+      // Plan mode: restrict to read-only tools only.
+      // Deliberately omit --settings (hook config) so dangerous tools have no approval path.
+      args.push('--allowedTools', PLAN_MODE_TOOLS.join(','))
+    } else if (options.hookSettingsPath) {
       // CLUI-scoped hook settings: the PreToolUse HTTP hook handles permissions
       // for dangerous tools (Bash, Edit, Write, MultiEdit).
       // Auto-approve safe tools so they don't trigger the permission card.
@@ -201,7 +223,10 @@ export class RunManager extends EventEmitter {
       args.push('--system-prompt', options.systemPrompt)
     }
     // Always tell Claude it's inside CLUI (additive, doesn't replace base prompt)
-    args.push('--append-system-prompt', CLUI_SYSTEM_HINT)
+    const systemHint = options.planMode
+      ? CLUI_SYSTEM_HINT + '\n\n' + PLAN_MODE_HINT
+      : CLUI_SYSTEM_HINT
+    args.push('--append-system-prompt', systemHint)
 
     if (DEBUG) {
       log(`Starting run ${requestId}: ${this.claudeBinary} ${args.join(' ')}`)

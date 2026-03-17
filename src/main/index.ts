@@ -273,26 +273,29 @@ ipcMain.handle(IPC.PRESIZE_WINDOW, (_e, targetHeight: number) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
   const bounds = mainWindow.getBounds()
   const h = Math.max(100, Math.round(targetHeight))
-  if (h <= bounds.height) return // shrinking doesn't need presize
+  if (!Number.isFinite(h) || h <= bounds.height) return
 
-  // Grow upward (anchor bottom)
-  const deltaH = h - bounds.height
-  let newY = bounds.y - deltaH
-  const newBottom = newY + h
+  try {
+    // Grow upward (anchor bottom)
+    const deltaH = h - bounds.height
+    let newY = bounds.y - deltaH
 
-  // Clamp to screen
-  const display = screen.getDisplayNearestPoint({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 })
-  const wa = display.workArea
+    // Clamp to screen
+    const display = screen.getDisplayNearestPoint({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 })
+    const wa = display.workArea
 
-  // If top goes above work area, push down
-  if (newY < wa.y) newY = wa.y
-  // If bottom goes below work area, push up
-  if (newY + h > wa.y + wa.height) newY = wa.y + wa.height - h
-  // Final clamp top
-  if (newY < wa.y) newY = wa.y
+    // If top goes above work area, push down
+    if (newY < wa.y) newY = wa.y
+    // If bottom goes below work area, push up
+    if (newY + h > wa.y + wa.height) newY = wa.y + wa.height - h
+    // Final clamp top
+    if (newY < wa.y) newY = wa.y
 
-  mainWindow.setBounds({ x: bounds.x, y: newY, width: bounds.width, height: h })
-  userPosition = { x: bounds.x, y: newY }
+    mainWindow.setBounds({ x: bounds.x, y: newY, width: bounds.width, height: h })
+    userPosition = { x: bounds.x, y: newY }
+  } catch (err) {
+    log(`PRESIZE_WINDOW error: ${err}`)
+  }
 })
 
 ipcMain.on(IPC.SET_WINDOW_WIDTH, (_e, wide: boolean) => {
@@ -685,6 +688,45 @@ ipcMain.handle(IPC.ATTACH_FILES, async () => {
     let dataUrl: string | undefined
 
     // Generate preview data URL for images (max 2MB to keep IPC fast)
+    if (IMAGE_EXTS.has(ext) && stat.size < 2 * 1024 * 1024) {
+      try {
+        const buf = readFileSync(fp)
+        dataUrl = `data:${mime};base64,${buf.toString('base64')}`
+      } catch {}
+    }
+
+    return {
+      id: crypto.randomUUID(),
+      type: IMAGE_EXTS.has(ext) ? 'image' : 'file',
+      name: basename(fp),
+      path: fp,
+      mimeType: mime,
+      dataUrl,
+      size: stat.size,
+    }
+  })
+})
+
+ipcMain.handle(IPC.PROCESS_DROPPED_FILES, async (_event, filePaths: string[]) => {
+  if (!filePaths || filePaths.length === 0) return []
+
+  const { basename, extname } = require('path')
+  const { readFileSync, statSync } = require('fs')
+
+  const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'])
+  const mimeMap: Record<string, string> = {
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
+    '.pdf': 'application/pdf', '.txt': 'text/plain', '.md': 'text/markdown',
+    '.json': 'application/json', '.yaml': 'text/yaml', '.toml': 'text/toml',
+  }
+
+  return filePaths.map((fp: string) => {
+    const ext = extname(fp).toLowerCase()
+    const mime = mimeMap[ext] || 'application/octet-stream'
+    const stat = statSync(fp)
+    let dataUrl: string | undefined
+
     if (IMAGE_EXTS.has(ext) && stat.size < 2 * 1024 * 1024) {
       try {
         const buf = readFileSync(fp)

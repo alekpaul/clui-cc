@@ -376,7 +376,15 @@ export class PtyRunManager extends EventEmitter {
     if (options.model) {
       args.push('--model', options.model)
     }
-    if (options.allowedTools?.length) {
+    if (options.planMode) {
+      args.push('--allowedTools', [
+        'Read', 'Glob', 'Grep', 'LS',
+        'TodoRead', 'TodoWrite',
+        'Agent', 'Task', 'TaskOutput',
+        'Notebook',
+        'WebSearch', 'WebFetch',
+      ].join(','))
+    } else if (options.allowedTools?.length) {
       args.push('--allowedTools', options.allowedTools.join(','))
     }
     if (options.systemPrompt) {

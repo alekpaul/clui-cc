@@ -50,7 +50,7 @@ function normalizeSystem(event: InitEvent): NormalizedEvent[] {
     type: 'session_init',
     sessionId: event.session_id,
     tools: event.tools || [],
-    model: event.model || 'unknown',
+    model: (event.model || 'unknown').replace(/\[.*\]$/, ''),
     mcpServers: event.mcp_servers || [],
     skills: event.skills || [],
     version: event.claude_code_version || 'unknown',

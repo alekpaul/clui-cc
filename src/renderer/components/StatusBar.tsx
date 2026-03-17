@@ -6,6 +6,41 @@ import { useSessionStore, AVAILABLE_MODELS } from '../stores/sessionStore'
 import { usePopoverLayer } from './PopoverLayer'
 import { useColors } from '../theme'
 
+/* ─── Circular Progress Ring (shared primitive) ─── */
+
+export function CircleProgress({
+  size,
+  strokeWidth,
+  progress,
+  color,
+  trackColor,
+}: {
+  size: number
+  strokeWidth: number
+  progress: number // 0–1
+  color: string
+  trackColor: string
+}) {
+  const radius = (size - strokeWidth) / 2
+  const circumference = 2 * Math.PI * radius
+  const offset = circumference * (1 - Math.min(Math.max(progress, 0), 1))
+  return (
+    <svg width={size} height={size} style={{ transform: 'rotate(-90deg)' }}>
+      <circle
+        cx={size / 2} cy={size / 2} r={radius}
+        fill="none" stroke={trackColor} strokeWidth={strokeWidth}
+      />
+      <circle
+        cx={size / 2} cy={size / 2} r={radius}
+        fill="none" stroke={color} strokeWidth={strokeWidth}
+        strokeDasharray={circumference} strokeDashoffset={offset}
+        strokeLinecap="round"
+        style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+      />
+    </svg>
+  )
+}
+
 /* ─── Model Picker (inline — tightly coupled to StatusBar) ─── */
 
 function ModelPicker() {
@@ -53,14 +88,17 @@ function ModelPicker() {
   }
 
   const activeLabel = (() => {
-    if (preferredModel) {
-      const m = AVAILABLE_MODELS.find((m) => m.id === preferredModel)
-      return m?.label || preferredModel
+    const resolveLabel = (id: string) => {
+      const exact = AVAILABLE_MODELS.find((m) => m.id === id)
+      if (exact) return exact.label
+      // Fallback: match by prefix (e.g. "claude-opus-4-6-somesuffix" → "Opus 4.6")
+      const prefix = AVAILABLE_MODELS.find((m) => id.startsWith(m.id))
+      if (prefix) return prefix.label
+      // Last resort: strip "claude-" prefix and format nicely
+      return id.replace(/^claude-/, '').replace(/-/g, ' ')
     }
-    if (tab?.sessionModel) {
-      const m = AVAILABLE_MODELS.find((m) => m.id === tab.sessionModel)
-      return m?.label || tab.sessionModel
-    }
+    if (preferredModel) return resolveLabel(preferredModel)
+    if (tab?.sessionModel) return resolveLabel(tab.sessionModel)
     return AVAILABLE_MODELS[0].label
   })()
 

@@ -196,6 +196,17 @@ input::placeholder {
 .btn-stack:hover .stack-btn-2 { right: 56px; }
 .btn-stack:hover .stack-btn-3 { right: 112px; }
 
+/* Right-side circle (mirrors .circles-out on the left) */
+.circle-out-right {
+  position: absolute;
+  left: calc(100% + 10px);
+  bottom: 0;
+  height: 46px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
 /* ─── Drag region for frameless window ─── */
 .drag-region {
   -webkit-app-region: drag;

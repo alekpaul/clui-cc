@@ -19,6 +19,7 @@ export interface CluiAPI {
   attachFiles(): Promise<Attachment[] | null>
   takeScreenshot(): Promise<Attachment | null>
   pasteImage(dataUrl: string): Promise<Attachment | null>
+  processDroppedFiles(filePaths: string[]): Promise<Attachment[]>
   transcribeAudio(audioBase64: string): Promise<{ error: string | null; transcript: string | null }>
   getDiagnostics(): Promise<any>
   respondPermission(tabId: string, questionId: string, optionId: string): Promise<boolean>
@@ -31,6 +32,7 @@ export interface CluiAPI {
   installPlugin(repo: string, pluginName: string, marketplace: string, sourcePath?: string, isSkillMd?: boolean): Promise<{ ok: boolean; error?: string }>
   uninstallPlugin(pluginName: string): Promise<{ ok: boolean; error?: string }>
   setPermissionMode(mode: string): void
+  setPlanMode(enabled: boolean): void
   getTheme(): Promise<{ isDark: boolean }>
   onThemeChange(callback: (isDark: boolean) => void): () => void
 
@@ -72,6 +74,7 @@ const api: CluiAPI = {
   attachFiles: () => ipcRenderer.invoke(IPC.ATTACH_FILES),
   takeScreenshot: () => ipcRenderer.invoke(IPC.TAKE_SCREENSHOT),
   pasteImage: (dataUrl) => ipcRenderer.invoke(IPC.PASTE_IMAGE, dataUrl),
+  processDroppedFiles: (filePaths) => ipcRenderer.invoke(IPC.PROCESS_DROPPED_FILES, filePaths),
   transcribeAudio: (audioBase64) => ipcRenderer.invoke(IPC.TRANSCRIBE_AUDIO, audioBase64),
   getDiagnostics: () => ipcRenderer.invoke(IPC.GET_DIAGNOSTICS),
   respondPermission: (tabId, questionId, optionId) =>
@@ -87,6 +90,7 @@ const api: CluiAPI = {
   uninstallPlugin: (pluginName) =>
     ipcRenderer.invoke(IPC.MARKETPLACE_UNINSTALL, { pluginName }),
   setPermissionMode: (mode) => ipcRenderer.send(IPC.SET_PERMISSION_MODE, mode),
+  setPlanMode: (enabled) => ipcRenderer.send(IPC.SET_PLAN_MODE, enabled),
   getTheme: () => ipcRenderer.invoke(IPC.GET_THEME),
   onThemeChange: (callback) => {
     const handler = (_e: Electron.IpcRendererEvent, isDark: boolean) => callback(isDark)
