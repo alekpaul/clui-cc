@@ -34,7 +34,13 @@ export function useHealthReconciliation() {
           if (t.status !== 'running' && t.status !== 'connecting') return t
 
           const healthEntry = stateByTab.get(t.id)
-          if (!healthEntry) return t
+
+          // Backend doesn't know about this tab (e.g. restored from persistence
+          // after app restart, or tab ID was remapped) → unstick
+          if (!healthEntry) {
+            changed = true
+            return { ...t, status: 'completed' as const, currentActivity: '', activeRequestId: null }
+          }
 
           // Backend says dead but UI thinks it's running → unstick
           if (healthEntry.status === 'dead') {
@@ -42,8 +48,20 @@ export function useHealthReconciliation() {
             return { ...t, status: 'dead' as const, currentActivity: 'Session ended', activeRequestId: null }
           }
 
+          // Backend says completed but UI still shows running (exit event dropped) → unstick
+          if (healthEntry.status === 'completed') {
+            changed = true
+            return { ...t, status: 'completed' as const, currentActivity: '', activeRequestId: null }
+          }
+
           // Backend says idle but UI thinks it's running → unstick
           if (healthEntry.status === 'idle' && !healthEntry.alive) {
+            changed = true
+            return { ...t, status: 'completed' as const, currentActivity: '', activeRequestId: null }
+          }
+
+          // Backend says running but process is not alive → unstick
+          if (healthEntry.status === 'running' && !healthEntry.alive) {
             changed = true
             return { ...t, status: 'completed' as const, currentActivity: '', activeRequestId: null }
           }

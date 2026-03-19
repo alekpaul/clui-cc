@@ -5,12 +5,14 @@ import { createInterface } from 'readline'
 import { execFile } from 'child_process'
 import { homedir } from 'os'
 import { ControlPlane } from './claude/control-plane'
+import { launchBrowserInspector } from './browser-inspector'
 import { ensureSkills, type SkillStatus } from './skills/installer'
 import { fetchCatalog, listInstalled, installPlugin, uninstallPlugin } from './marketplace/catalog'
 import { log as _log, LOG_FILE, flushLogs } from './logger'
 import { IPC } from '../shared/types'
 import type { RunOptions, NormalizedEvent, EnrichedError } from '../shared/types'
 
+const IS_PRODUCTION = !process.env.ELECTRON_RENDERER_URL
 const DEBUG_MODE = process.env.CLUI_DEBUG === '1'
 const SPACES_DEBUG = DEBUG_MODE || process.env.CLUI_SPACES_DEBUG === '1'
 
@@ -133,6 +135,11 @@ controlPlane.on('tab-status-change', (tabId: string, newStatus: string, oldStatu
 
 controlPlane.on('error', (tabId: string, error: EnrichedError) => {
   broadcast('clui:enriched-error', tabId, error)
+})
+
+// Wire dev server status changes → renderer
+controlPlane.devServerManager.on('status-change', (server: import('../shared/types').DevServer) => {
+  broadcast(IPC.DEV_SERVER_STATUS, server)
 })
 
 // ─── Window Creation ───
@@ -320,8 +327,14 @@ ipcMain.handle(IPC.ANIMATE_HEIGHT, () => {
 
 ipcMain.on(IPC.START_WINDOW_DRAG, (_e, deltaX: number, deltaY: number) => {
   if (!mainWindow || mainWindow.isDestroyed()) return
+  if (typeof deltaX !== 'number' || typeof deltaY !== 'number') return
   const [x, y] = mainWindow.getPosition()
-  mainWindow.setPosition(x + deltaX, y + deltaY)
+  const newX = x + deltaX
+  const newY = y + deltaY
+  if (!Number.isFinite(newX) || !Number.isFinite(newY)) return
+  try {
+    mainWindow.setPosition(newX, newY)
+  } catch {}
 })
 
 ipcMain.on(IPC.DRAG_END, () => {
@@ -351,10 +364,20 @@ ipcMain.on(IPC.DRAG_END, () => {
     if (!mainWindow || mainWindow.isDestroyed()) { clearInterval(interval); return }
     const t = step / steps
     const ease = t * (2 - t)
-    mainWindow.setPosition(
-      Math.round(startX + (clamped.x - startX) * ease),
-      Math.round(startY + (clamped.y - startY) * ease),
-    )
+    const newX = Math.round(startX + (clamped.x - startX) * ease)
+    const newY = Math.round(startY + (clamped.y - startY) * ease)
+    if (!Number.isFinite(newX) || !Number.isFinite(newY)) {
+      clearInterval(interval)
+      userPosition = { x: clamped.x, y: clamped.y }
+      return
+    }
+    try {
+      mainWindow.setPosition(newX, newY)
+    } catch {
+      clearInterval(interval)
+      userPosition = { x: clamped.x, y: clamped.y }
+      return
+    }
     if (step >= steps) {
       clearInterval(interval)
       userPosition = { x: clamped.x, y: clamped.y }
@@ -385,20 +408,32 @@ ipcMain.handle(IPC.START, async () => {
   log('IPC START — fetching static CLI info')
   const { execSync } = require('child_process')
 
+  // Resolve full path to claude binary — packaged apps have minimal PATH
+  const claudeBinCandidates = [
+    join(homedir(), '.local/bin/claude'),
+    '/usr/local/bin/claude',
+    '/opt/homebrew/bin/claude',
+    join(homedir(), '.npm-global/bin/claude'),
+  ]
+  let claudeBin = 'claude'
+  for (const c of claudeBinCandidates) {
+    if (existsSync(c)) { claudeBin = c; break }
+  }
+
   let version = 'unknown'
   try {
-    version = execSync('claude -v', { encoding: 'utf-8', timeout: 5000 }).trim()
+    version = execSync(`"${claudeBin}" -v`, { encoding: 'utf-8', timeout: 5000 }).trim()
   } catch {}
 
   let auth: { email?: string; subscriptionType?: string; authMethod?: string } = {}
   try {
-    const raw = execSync('claude auth status', { encoding: 'utf-8', timeout: 5000 }).trim()
+    const raw = execSync(`"${claudeBin}" auth status`, { encoding: 'utf-8', timeout: 5000 }).trim()
     auth = JSON.parse(raw)
   } catch {}
 
   let mcpServers: string[] = []
   try {
-    const raw = execSync('claude mcp list', { encoding: 'utf-8', timeout: 5000 }).trim()
+    const raw = execSync(`"${claudeBin}" mcp list`, { encoding: 'utf-8', timeout: 5000 }).trim()
     if (raw) mcpServers = raw.split('\n').filter(Boolean)
   } catch {}
 
@@ -653,6 +688,23 @@ ipcMain.handle(IPC.OPEN_EXTERNAL, async (_event, url: string) => {
   }
 })
 
+ipcMain.handle(IPC.INSPECT_ELEMENT, async (_event, url: string) => {
+  if (!url || typeof url !== 'string') return null
+  log(`IPC INSPECT_ELEMENT: ${url}`)
+  try {
+    return await launchBrowserInspector(url, (result) => {
+      broadcast(IPC.ELEMENT_SELECTED, result)
+    })
+  } catch (err: unknown) {
+    log(`INSPECT_ELEMENT error: ${err}`)
+    return null
+  }
+})
+
+ipcMain.handle(IPC.STOP_DEV_SERVER, async (_event, serverId: string) => {
+  return controlPlane.devServerManager.stopServer(serverId)
+})
+
 ipcMain.handle(IPC.ATTACH_FILES, async () => {
   if (!mainWindow) return null
   // macOS: activate app so unparented dialog appears on top
@@ -688,45 +740,6 @@ ipcMain.handle(IPC.ATTACH_FILES, async () => {
     let dataUrl: string | undefined
 
     // Generate preview data URL for images (max 2MB to keep IPC fast)
-    if (IMAGE_EXTS.has(ext) && stat.size < 2 * 1024 * 1024) {
-      try {
-        const buf = readFileSync(fp)
-        dataUrl = `data:${mime};base64,${buf.toString('base64')}`
-      } catch {}
-    }
-
-    return {
-      id: crypto.randomUUID(),
-      type: IMAGE_EXTS.has(ext) ? 'image' : 'file',
-      name: basename(fp),
-      path: fp,
-      mimeType: mime,
-      dataUrl,
-      size: stat.size,
-    }
-  })
-})
-
-ipcMain.handle(IPC.PROCESS_DROPPED_FILES, async (_event, filePaths: string[]) => {
-  if (!filePaths || filePaths.length === 0) return []
-
-  const { basename, extname } = require('path')
-  const { readFileSync, statSync } = require('fs')
-
-  const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'])
-  const mimeMap: Record<string, string> = {
-    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif', '.webp': 'image/webp', '.svg': 'image/svg+xml',
-    '.pdf': 'application/pdf', '.txt': 'text/plain', '.md': 'text/markdown',
-    '.json': 'application/json', '.yaml': 'text/yaml', '.toml': 'text/toml',
-  }
-
-  return filePaths.map((fp: string) => {
-    const ext = extname(fp).toLowerCase()
-    const mime = mimeMap[ext] || 'application/octet-stream'
-    const stat = statSync(fp)
-    let dataUrl: string | undefined
-
     if (IMAGE_EXTS.has(ext) && stat.size < 2 * 1024 * 1024) {
       try {
         const buf = readFileSync(fp)
@@ -1101,12 +1114,37 @@ app.whenReady().then(() => {
   tray = new Tray(trayIcon)
   tray.setToolTip('Clui CC — Claude Code UI')
   tray.on('click', () => toggleWindow('tray click'))
-  tray.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: 'Show Clui CC', click: () => toggleWindow('tray menu Show Clui CC') },
-      { label: 'Quit', click: () => { app.quit() } },
-    ])
-  )
+  // Auto-start: enable login item in production builds
+  if (IS_PRODUCTION) {
+    const loginSettings = app.getLoginItemSettings()
+    if (!loginSettings.openAtLogin) {
+      app.setLoginItemSettings({ openAtLogin: true })
+      log('Auto-start enabled (first launch)')
+    }
+  }
+
+  const buildTrayMenu = () => {
+    const loginEnabled = app.getLoginItemSettings().openAtLogin
+    tray?.setContextMenu(
+      Menu.buildFromTemplate([
+        { label: 'Show Clui CC', click: () => toggleWindow('tray menu Show Clui CC') },
+        { type: 'separator' },
+        {
+          label: 'Launch at Login',
+          type: 'checkbox',
+          checked: loginEnabled,
+          click: () => {
+            app.setLoginItemSettings({ openAtLogin: !loginEnabled })
+            log(`Auto-start ${!loginEnabled ? 'enabled' : 'disabled'} via tray menu`)
+            buildTrayMenu()
+          },
+        },
+        { type: 'separator' },
+        { label: 'Quit', click: () => { app.quit() } },
+      ])
+    )
+  }
+  buildTrayMenu()
 
   app.on('activate', () => toggleWindow('app activate'))
 })

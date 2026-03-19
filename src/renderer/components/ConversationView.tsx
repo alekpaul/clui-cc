@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm'
 import {
   FileText, PencilSimple, FileArrowUp, Terminal, MagnifyingGlass, Globe,
   Robot, Question, Wrench, FolderOpen, Copy, Check, CaretRight, CaretDown,
-  SpinnerGap, ArrowCounterClockwise, Square,
+  SpinnerGap, ArrowCounterClockwise, Square, Play, CursorClick,
 } from '@phosphor-icons/react'
 import { useSessionStore } from '../stores/sessionStore'
 import { PermissionCard } from './PermissionCard'
@@ -355,9 +355,10 @@ function CopyButton({ text }: { text: string }) {
 
 function InterruptButton({ tabId }: { tabId: string }) {
   const colors = useColors()
+  const cancelTab = useSessionStore((s) => s.cancelTab)
 
   const handleStop = () => {
-    window.clui.stopTab(tabId)
+    cancelTab(tabId)
   }
 
   return (
@@ -552,6 +553,56 @@ function ImageCard({ src, alt, colors }: { src?: string; alt?: string; colors: R
   )
 }
 
+// ─── Shell command detection ───
+
+/** Prefixes that indicate a shell command in inline code */
+const SHELL_CMD_RE = /^(?:npm\s+run|npm\s+(?:install|start|test|exec)|npx|yarn|pnpm|node|bun|make|cargo|go\s+(?:build|run)|python|pip|brew|curl|git|docker|kubectl|sh|bash|zsh)\b/
+
+function isShellCommand(text: string): boolean {
+  return SHELL_CMD_RE.test(text.trim())
+}
+
+/** Extract a runnable command from a code block (first non-comment, non-empty line) */
+function extractCommand(text: string): string | null {
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//')) continue
+    if (isShellCommand(trimmed)) return trimmed
+  }
+  return null
+}
+
+// ─── Run Command Button (inline, for code blocks) ───
+
+function RunCommandButton({ command, colors }: { command: string; colors: ReturnType<typeof useColors> }) {
+  const sendMessage = useSessionStore((s) => s.sendMessage)
+  const [ran, setRan] = useState(false)
+
+  const handleRun = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    sendMessage(`Run \`${command}\``)
+    setRan(true)
+    setTimeout(() => setRan(false), 2000)
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleRun}
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] cursor-pointer transition-colors"
+      style={{
+        background: ran ? colors.statusCompleteBg : colors.surfaceHover,
+        color: ran ? colors.statusComplete : colors.accent,
+        border: `1px solid ${ran ? colors.statusComplete : colors.toolBorder}`,
+      }}
+      title={`Run: ${command}`}
+    >
+      {ran ? <Check size={10} /> : <Play size={10} weight="fill" />}
+      <span>{ran ? 'Sent' : 'Run'}</span>
+    </button>
+  )
+}
+
 // ─── Assistant Message (memoized — only re-renders when content changes) ───
 
 const AssistantMessage = React.memo(function AssistantMessage({
@@ -562,22 +613,154 @@ const AssistantMessage = React.memo(function AssistantMessage({
   skipMotion?: boolean
 }) {
   const colors = useColors()
+  const devServers = useSessionStore((s) => {
+    const tab = s.tabs.find((t) => t.id === s.activeTabId)
+    return tab?.devServers ?? []
+  })
+  const stopDevServer = useSessionStore((s) => s.stopDevServer)
 
   const markdownComponents = useMemo(() => ({
     table: ({ children }: any) => <TableScrollWrapper>{children}</TableScrollWrapper>,
-    a: ({ href, children }: any) => (
-      <button
-        type="button"
-        className="underline decoration-dotted underline-offset-2 cursor-pointer"
-        style={{ color: colors.accent }}
-        onClick={() => {
-          if (href) window.clui.openExternal(String(href))
-        }}
-      >
-        {children}
-      </button>
-    ),
+    a: ({ href, children }: any) => {
+      const hrefStr = href ? String(href) : ''
+      const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(hrefStr)
+
+      // Find matching dev server by port
+      let serverStatus: 'alive' | 'dead' | 'unknown' | null = null
+      let serverId: string | null = null
+      if (isLocalhost) {
+        const portMatch = hrefStr.match(/:(\d+)/)
+        const port = portMatch ? parseInt(portMatch[1], 10) : null
+        const server = port ? devServers.find((s) => s.port === port) : null
+        if (server) {
+          serverStatus = server.status
+          serverId = server.id
+        }
+      }
+
+      const statusColor = serverStatus === 'alive' ? '#4ade80' : serverStatus === 'dead' ? '#f87171' : '#9ca3af'
+
+      return (
+        <span style={{ display: 'inline' }}>
+          {isLocalhost && serverStatus && (
+            <span
+              style={{
+                display: 'inline-block',
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                background: statusColor,
+                marginRight: 4,
+                verticalAlign: 'middle',
+                boxShadow: serverStatus === 'alive' ? `0 0 4px ${statusColor}` : undefined,
+              }}
+              title={`Server ${serverStatus}`}
+            />
+          )}
+          <button
+            type="button"
+            className="underline decoration-dotted underline-offset-2 cursor-pointer"
+            style={{ color: colors.accent, display: 'inline', overflowWrap: 'anywhere', wordBreak: 'break-all' }}
+            onClick={() => {
+              if (href) window.clui.openExternal(hrefStr)
+            }}
+          >
+            {children}
+          </button>
+          {isLocalhost && (
+            <button
+              type="button"
+              className="inline-flex items-center justify-center cursor-pointer"
+              style={{
+                color: colors.accent,
+                background: 'transparent',
+                border: 'none',
+                padding: '0 2px',
+                verticalAlign: 'middle',
+                opacity: 0.7,
+              }}
+              title="Inspect element on this page"
+              onClick={(e) => {
+                e.stopPropagation()
+                window.dispatchEvent(new CustomEvent('clui:inspect-url', { detail: hrefStr }))
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0.7' }}
+            >
+              <CursorClick size={13} weight="bold" />
+            </button>
+          )}
+          {isLocalhost && serverStatus === 'alive' && serverId && (
+            <button
+              type="button"
+              className="inline-flex items-center justify-center cursor-pointer"
+              style={{
+                color: '#f87171',
+                background: 'transparent',
+                border: 'none',
+                padding: '0 2px',
+                verticalAlign: 'middle',
+                opacity: 0.7,
+                fontSize: 11,
+              }}
+              title="Stop dev server"
+              onClick={(e) => {
+                e.stopPropagation()
+                stopDevServer(serverId!)
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0.7' }}
+            >
+              <Square size={11} weight="fill" />
+            </button>
+          )}
+        </span>
+      )
+    },
     img: ({ src, alt }: any) => <ImageCard src={src} alt={alt} colors={colors} />,
+    // Inline code: detect shell commands and make them clickable action items
+    code: ({ children, className }: any) => {
+      // className is set for fenced code blocks inside <pre> — skip those (handled by pre)
+      if (className) {
+        return <code className={className}>{children}</code>
+      }
+      const text = String(children).replace(/\n$/, '')
+      if (isShellCommand(text)) {
+        return (
+          <span className="inline-flex items-center gap-1">
+            <code
+              className="cursor-pointer transition-colors"
+              style={{ borderColor: colors.accent }}
+              title={`Click to run: ${text}`}
+            >
+              {text}
+            </code>
+            <RunCommandButton command={text} colors={colors} />
+          </span>
+        )
+      }
+      return <code>{children}</code>
+    },
+    // Code blocks: add a "Run" button if the block contains a shell command
+    pre: ({ children }: any) => {
+      // Extract text content from nested <code> element
+      const codeEl = React.Children.toArray(children).find(
+        (child: any) => child?.type === 'code' || child?.props?.className
+      ) as any
+      const codeText = codeEl?.props?.children ? String(codeEl.props.children).replace(/\n$/, '') : ''
+      const runnableCmd = extractCommand(codeText)
+
+      return (
+        <div className="relative group/code">
+          <pre>{children}</pre>
+          {runnableCmd && (
+            <div className="absolute top-1 right-1 opacity-0 group-hover/code:opacity-100 transition-opacity duration-100">
+              <RunCommandButton command={runnableCmd} colors={colors} />
+            </div>
+          )}
+        </div>
+      )
+    },
   }), [colors])
 
   const inner = (

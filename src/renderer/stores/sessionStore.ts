@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { TabStatus, NormalizedEvent, EnrichedError, Message, TabState, Attachment, CatalogPlugin, PluginStatus } from '../../shared/types'
+import type { TabStatus, NormalizedEvent, EnrichedError, Message, TabState, Attachment, ElementInspection, CatalogPlugin, PluginStatus, DevServer } from '../../shared/types'
 import { useThemeStore } from '../theme'
 import notificationSrc from '../../../resources/notification.mp3'
 
@@ -78,6 +78,8 @@ interface State {
   buildYourOwn: () => void
   resumeSession: (sessionId: string, title?: string, projectPath?: string) => Promise<string>
   addSystemMessage: (content: string) => void
+  cancelTab: (tabId: string) => void
+  setElementContext: (ctx: ElementInspection | null) => void
   sendMessage: (prompt: string, projectPath?: string) => void
   respondPermission: (tabId: string, questionId: string, optionId: string) => void
   addDirectory: (dir: string) => void
@@ -90,6 +92,8 @@ interface State {
   handleNormalizedEvent: (tabId: string, event: NormalizedEvent) => void
   handleStatusChange: (tabId: string, newStatus: string, oldStatus: string) => void
   handleError: (tabId: string, error: EnrichedError) => void
+  updateDevServerStatus: (server: DevServer) => void
+  stopDevServer: (serverId: string) => void
 }
 
 let msgCounter = 0
@@ -113,6 +117,8 @@ async function playNotificationIfHidden(): Promise<void> {
 // ─── Persist last chosen working directory across launches ───
 
 const LAST_DIR_KEY = 'clui:lastWorkingDirectory'
+const TABS_KEY = 'clui:tabs'
+const ACTIVE_TAB_KEY = 'clui:activeTabId'
 
 function getLastWorkingDirectory(): string | null {
   try { return localStorage.getItem(LAST_DIR_KEY) } catch { return null }
@@ -146,14 +152,115 @@ function makeLocalTab(): TabState {
     workingDirectory: savedDir || '~',
     hasChosenDirectory: !!savedDir,
     additionalDirs: [],
+    elementContext: null,
+    devServers: [],
   }
 }
 
-const initialTab = makeLocalTab()
+// ─── Tab persistence (survive sleep/wake & dev reloads) ───
+
+interface PersistedTab {
+  id: string
+  claudeSessionId: string | null
+  title: string
+  messages: Message[]
+  workingDirectory: string
+  hasChosenDirectory: boolean
+  additionalDirs: string[]
+  lastResult: import('../../shared/types').RunResult | null
+}
+
+function persistTabs(tabs: TabState[], activeTabId: string): void {
+  try {
+    const serializable: PersistedTab[] = tabs.map((t) => ({
+      id: t.id,
+      claudeSessionId: t.claudeSessionId,
+      title: t.title,
+      messages: t.messages,
+      workingDirectory: t.workingDirectory,
+      hasChosenDirectory: t.hasChosenDirectory,
+      additionalDirs: t.additionalDirs,
+      lastResult: t.lastResult,
+    }))
+    localStorage.setItem(TABS_KEY, JSON.stringify(serializable))
+    localStorage.setItem(ACTIVE_TAB_KEY, activeTabId)
+  } catch {}
+}
+
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+function debouncedPersistTabs(tabs: TabState[], activeTabId: string): void {
+  if (persistTimer) clearTimeout(persistTimer)
+  persistTimer = setTimeout(() => persistTabs(tabs, activeTabId), 500)
+}
+
+function restoreTab(saved: PersistedTab): TabState {
+  // Reset transient state — backend processes are gone after restart
+  const status: TabStatus = saved.messages.length > 0 ? 'completed' : 'idle'
+  return {
+    id: saved.id,
+    claudeSessionId: saved.claudeSessionId,
+    status,
+    activeRequestId: null,
+    hasUnread: false,
+    currentActivity: '',
+    permissionQueue: [],
+    permissionDenied: null,
+    attachments: [],
+    messages: saved.messages,
+    title: saved.title,
+    lastResult: saved.lastResult,
+    sessionModel: null,
+    sessionTools: [],
+    sessionMcpServers: [],
+    sessionSkills: [],
+    sessionVersion: null,
+    queuedPrompts: [],
+    workingDirectory: saved.workingDirectory,
+    hasChosenDirectory: saved.hasChosenDirectory,
+    additionalDirs: saved.additionalDirs,
+    elementContext: null,
+    devServers: [],
+  }
+}
+
+function loadPersistedTabs(): { tabs: TabState[]; activeTabId: string } | null {
+  try {
+    const raw = localStorage.getItem(TABS_KEY)
+    if (!raw) return null
+    const saved: PersistedTab[] = JSON.parse(raw)
+    if (!Array.isArray(saved) || saved.length === 0) return null
+    const tabs = saved.map(restoreTab)
+    const savedActive = localStorage.getItem(ACTIVE_TAB_KEY)
+    const activeTabId = tabs.find((t) => t.id === savedActive)?.id || tabs[0].id
+    return { tabs, activeTabId }
+  } catch {
+    return null
+  }
+}
+
+const restored = loadPersistedTabs()
+const initialTab = restored ? restored.tabs[0] : makeLocalTab()
+
+// Initialize msgCounter past any existing message IDs to avoid key collisions
+if (restored) {
+  for (const tab of restored.tabs) {
+    for (const msg of tab.messages) {
+      const m = msg.id.match(/^msg-(\d+)$/)
+      if (m) msgCounter = Math.max(msgCounter, parseInt(m[1], 10))
+    }
+  }
+}
+
+// Track restored tabs that need backend re-registration before first prompt
+const tabsNeedingRegistration = new Set<string>(restored ? restored.tabs.map((t) => t.id) : [])
+
+// Track tab IDs where the user clicked cancel before createTab() resolved.
+// When createTab().then() fires, it checks this set and skips the prompt.
+const cancelledBeforeRegistration = new Set<string>()
 
 export const useSessionStore = create<State>((set, get) => ({
-  tabs: [initialTab],
-  activeTabId: initialTab.id,
+  tabs: restored ? restored.tabs : [initialTab],
+  activeTabId: restored ? restored.activeTabId : initialTab.id,
   isExpanded: false,
   staticInfo: null,
   preferredModel: null,
@@ -371,6 +478,8 @@ export const useSessionStore = create<State>((set, get) => ({
   },
 
   closeTab: (tabId) => {
+    tabsNeedingRegistration.delete(tabId)
+    cancelledBeforeRegistration.delete(tabId)
     window.clui.closeTab(tabId).catch(() => {})
 
     const s = get()
@@ -568,6 +677,38 @@ export const useSessionStore = create<State>((set, get) => ({
     }))
   },
 
+  // ─── Cancel ───
+
+  cancelTab: (tabId) => {
+    // Always attempt backend cancel
+    window.clui.stopTab(tabId).catch(() => {})
+
+    const tab = get().tabs.find((t) => t.id === tabId)
+    if (!tab) return
+
+    // If the tab is in 'connecting' state, the backend might not know about it yet
+    // (e.g., restored tab awaiting createTab()). Mark it cancelled so the pending
+    // createTab().then() callback won't send the prompt.
+    if (tab.status === 'connecting') {
+      cancelledBeforeRegistration.add(tabId)
+      const prevStatus = tab.messages.length > 0 ? 'completed' : 'idle'
+      set((s) => ({
+        tabs: s.tabs.map((t) =>
+          t.id === tabId
+            ? { ...t, status: prevStatus as TabStatus, activeRequestId: null, currentActivity: '', permissionQueue: [] }
+            : t
+        ),
+      }))
+    }
+  },
+
+  setElementContext: (ctx) => {
+    const { activeTabId } = get()
+    set((s) => ({
+      tabs: s.tabs.map((t) => t.id === activeTabId ? { ...t, elementContext: ctx } : t),
+    }))
+  },
+
   // ─── Send ───
 
   sendMessage: (prompt, projectPath) => {
@@ -583,13 +724,29 @@ export const useSessionStore = create<State>((set, get) => ({
     const isBusy = tab.status === 'running'
     const requestId = crypto.randomUUID()
 
-    // Build full prompt with attachment context
+    // Build full prompt with attachment context + element inspector context
     let fullPrompt = prompt
     if (tab.attachments.length > 0) {
       const attachmentCtx = tab.attachments
         .map((a) => `[Attached ${a.type}: ${a.path}]`)
         .join('\n')
       fullPrompt = `${attachmentCtx}\n\n${prompt}`
+    }
+    if (tab.elementContext) {
+      const el = tab.elementContext
+      const lines: string[] = [
+        `[Inspected element on ${el.url}]`,
+        `- Element: <${el.tagName}${el.id ? ` id="${el.id}"` : ''}${el.classes.length ? ` class="${el.classes.join(' ')}"` : ''}>`,
+        `- Selector: ${el.selector}`,
+      ]
+      if (el.reactComponent) {
+        const rc = el.reactComponent
+        lines.push(`- React component: ${rc.name}${rc.file ? ` (${rc.file}${rc.line ? ':' + rc.line : ''})` : ''}`)
+        if (rc.propKeys.length > 0) lines.push(`- Props: ${rc.propKeys.join(', ')}`)
+      }
+      if (el.innerText) lines.push(`- Text: "${el.innerText}"`)
+      if (el.outerHTML) lines.push(`- HTML: ${el.outerHTML}`)
+      fullPrompt = `${lines.join('\n')}\n\n${fullPrompt}`
     }
 
     const title = tab.messages.length === 0
@@ -625,6 +782,7 @@ export const useSessionStore = create<State>((set, get) => ({
           currentActivity: 'Starting...',
           title,
           attachments: [],
+          elementContext: null,
           messages: [
             ...withEffectiveBase.messages,
             { id: nextMsgId(), role: 'user' as const, content: prompt, timestamp: Date.now() },
@@ -635,21 +793,51 @@ export const useSessionStore = create<State>((set, get) => ({
 
     // Send to backend — ControlPlane will queue if a run is active
     const { preferredModel } = get()
-    window.clui.prompt(activeTabId, requestId, {
-      prompt: fullPrompt,
-      projectPath: resolvedPath,
-      sessionId: tab.claudeSessionId || undefined,
-      model: preferredModel || undefined,
-      addDirs: tab.additionalDirs.length > 0 ? tab.additionalDirs : undefined,
-    }).catch((err: Error) => {
-      get().handleError(activeTabId, {
-        message: err.message,
-        stderrTail: [],
-        exitCode: null,
-        elapsedMs: 0,
-        toolCallCount: 0,
+    const doPrompt = (backendTabId: string) => {
+      window.clui.prompt(backendTabId, requestId, {
+        prompt: fullPrompt,
+        projectPath: resolvedPath,
+        sessionId: tab.claudeSessionId || undefined,
+        model: preferredModel || undefined,
+        addDirs: tab.additionalDirs.length > 0 ? tab.additionalDirs : undefined,
+      }).catch((err: Error) => {
+        get().handleError(backendTabId, {
+          message: err.message,
+          stderrTail: [],
+          exitCode: null,
+          elapsedMs: 0,
+          toolCallCount: 0,
+        })
       })
-    })
+    }
+
+    // Restored tabs need backend re-registration before first prompt
+    if (tabsNeedingRegistration.has(activeTabId)) {
+      tabsNeedingRegistration.delete(activeTabId)
+      window.clui.createTab().then(({ tabId: newBackendId }) => {
+        // Check if the user cancelled while we were waiting for createTab()
+        if (cancelledBeforeRegistration.has(activeTabId)) {
+          cancelledBeforeRegistration.delete(activeTabId)
+          // Close the backend tab we just created — it's no longer needed
+          window.clui.closeTab(newBackendId).catch(() => {})
+          return
+        }
+        // Remap frontend tab to use the backend-assigned ID
+        set((s) => ({
+          tabs: s.tabs.map((t) => t.id === activeTabId ? { ...t, id: newBackendId } : t),
+          activeTabId: s.activeTabId === activeTabId ? newBackendId : s.activeTabId,
+        }))
+        doPrompt(newBackendId)
+      }).catch(() => {
+        if (cancelledBeforeRegistration.has(activeTabId)) {
+          cancelledBeforeRegistration.delete(activeTabId)
+          return
+        }
+        doPrompt(activeTabId)
+      })
+    } else {
+      doPrompt(activeTabId)
+    }
   },
 
   // ─── Finder folder detection ───
@@ -881,6 +1069,15 @@ export const useSessionStore = create<State>((set, get) => ({
               ]
             }
             break
+
+          case 'dev_server_detected': {
+            const srv = event.server
+            // Deduplicate by port
+            if (!updated.devServers.some((s) => s.port === srv.port)) {
+              updated.devServers = [...updated.devServers, srv]
+            }
+            break
+          }
         }
 
         return updated
@@ -962,4 +1159,24 @@ export const useSessionStore = create<State>((set, get) => ({
       }),
     }))
   },
+
+  updateDevServerStatus: (server) => {
+    set((s) => ({
+      tabs: s.tabs.map((t) => ({
+        ...t,
+        devServers: t.devServers.map((ds) =>
+          ds.id === server.id ? { ...ds, status: server.status, pid: server.pid } : ds
+        ),
+      })),
+    }))
+  },
+
+  stopDevServer: (serverId) => {
+    window.clui.stopDevServer(serverId).catch(() => {})
+  },
 }))
+
+// ─── Auto-persist tabs on every state change (debounced) ───
+useSessionStore.subscribe((state) => {
+  debouncedPersistTabs(state.tabs, state.activeTabId)
+})

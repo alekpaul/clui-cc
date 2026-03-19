@@ -32,6 +32,21 @@ const CLUI_SYSTEM_HINT = [
   'You are still a software engineering assistant. Keep using your tools (Read, Edit, Bash, etc.)',
   'normally. But when presenting information, links, resources, or explanations to the user,',
   'take full advantage of the rich UI. The user expects a polished chat experience, not raw terminal text.',
+  '',
+  'When the user asks to build, run, or execute something:',
+  '- Present the available commands as a bullet list with inline code: e.g. `npm run build`',
+  '- CLUI renders inline code shell commands (npm, npx, yarn, make, cargo, etc.) as clickable action buttons.',
+  '- The user can click "Run" next to any command to execute it — so always show the exact runnable command.',
+  '- If multiple build/run options exist (dev, build, test, etc.), list them all so the user can pick.',
+  '- After listing options, ask which one the user wants to run, or offer to run the most likely one.',
+  '',
+  'CRITICAL: When starting a development server or any long-running process',
+  '(npm run dev, npx vite, yarn dev, python -m http.server, etc.),',
+  'you MUST launch it fully detached so it survives after this conversation turn ends.',
+  'Use this exact pattern:',
+  '  nohup npm run dev > /tmp/clui-dev-server.log 2>&1 & disown',
+  'Then sleep 2 seconds and check the log or curl localhost to confirm it started.',
+  'NEVER run a dev server in the foreground — it will be killed when this turn ends.',
 ].join('\n')
 
 // Tools auto-approved via --allowedTools (never trigger the permission card).
@@ -93,6 +108,8 @@ export interface RunHandle {
   sawPermissionRequest: boolean
   /** Permission denials from result event */
   permissionDenials: Array<{ tool_name: string; tool_use_id: string }>
+  /** Whether a result event was received (run completed successfully) */
+  resultReceived: boolean
 }
 
 /**
@@ -120,6 +137,7 @@ export class RunManager extends EventEmitter {
 
   private _findClaudeBinary(): string {
     const candidates = [
+      join(homedir(), '.local/bin/claude'),
       '/usr/local/bin/claude',
       '/opt/homebrew/bin/claude',
       join(homedir(), '.npm-global/bin/claude'),
@@ -254,6 +272,7 @@ export class RunManager extends EventEmitter {
       toolCallCount: 0,
       sawPermissionRequest: false,
       permissionDenials: [],
+      resultReceived: false,
     }
 
     // ─── stdout → NDJSON parser → normalizer → events ───
@@ -299,8 +318,23 @@ export class RunManager extends EventEmitter {
       // Close stdin after result event — with stream-json input the process
       // stays alive waiting for more input; closing stdin triggers clean exit.
       if (raw.type === 'result') {
+        handle.resultReceived = true
         log(`Run complete [${requestId}]: sawPermissionRequest=${handle.sawPermissionRequest}, denials=${handle.permissionDenials.length}`)
         try { child.stdin?.end() } catch {}
+
+        // If the process doesn't exit within 3s after stdin EOF, don't
+        // force-kill it — that would cause Claude to clean up child processes
+        // (e.g. dev servers started via Bash tool). Instead, detach the run
+        // handle so the tab unblocks, and let the process die on its own.
+        setTimeout(() => {
+          if (child.exitCode === null && this.activeRuns.has(requestId)) {
+            log(`Process still alive after result [${requestId}] — detaching handle (dev servers may be running)`)
+            this._finishedRuns.set(requestId, handle)
+            this.activeRuns.delete(requestId)
+            this.emit('exit', requestId, 0, null, handle.sessionId)
+            setTimeout(() => this._finishedRuns.delete(requestId), 5000)
+          }
+        }, 3000)
       }
     })
 
@@ -322,11 +356,18 @@ export class RunManager extends EventEmitter {
     // ─── Process lifecycle ───
     // Snapshot diagnostics BEFORE deleting the handle so callers can still read them.
     child.on('close', (code, signal) => {
-      log(`Process closed [${requestId}]: code=${code} signal=${signal}`)
+      log(`Process closed [${requestId}]: code=${code} signal=${signal} resultReceived=${handle.resultReceived}`)
+      // If the handle was already detached (by the 3s/5s timeout), skip duplicate emit
+      if (!this.activeRuns.has(requestId)) {
+        log(`Handle already detached for [${requestId}], skipping exit emit`)
+        return
+      }
+      // If we already received a result event, the run completed successfully
+      const effectiveCode = handle.resultReceived ? 0 : code
       // Move handle to finished map so getEnrichedError still works after exit
       this._finishedRuns.set(requestId, handle)
       this.activeRuns.delete(requestId)
-      this.emit('exit', requestId, code, signal, handle.sessionId)
+      this.emit('exit', requestId, effectiveCode, signal, handle.sessionId)
       // Clean up finished run after a short delay (gives callers time to read diagnostics)
       setTimeout(() => this._finishedRuns.delete(requestId), 5000)
     })
@@ -370,7 +411,8 @@ export class RunManager extends EventEmitter {
   }
 
   /**
-   * Cancel a running process: SIGINT, then SIGKILL after 5s.
+   * Cancel a running process: SIGINT, then detach handle after 5s.
+   * Avoids SIGKILL which would destroy child processes (dev servers).
    */
   cancel(requestId: string): boolean {
     const handle = this.activeRuns.get(requestId)
@@ -378,14 +420,17 @@ export class RunManager extends EventEmitter {
 
     log(`Cancelling run ${requestId}`)
     handle.process.kill('SIGINT')
+    try { handle.process.stdin?.end() } catch {}
 
-    // Fallback: SIGKILL if process hasn't exited after 5s.
-    // Only check exitCode — process.killed is set true by the SIGINT call above,
-    // so checking !killed would prevent the fallback from ever firing.
+    // Fallback: if process hasn't exited after 5s, detach the handle
+    // so the tab unblocks. Don't SIGKILL — that kills dev servers.
     setTimeout(() => {
-      if (handle.process.exitCode === null) {
-        log(`Force killing run ${requestId} (SIGINT did not terminate)`)
-        handle.process.kill('SIGKILL')
+      if (handle.process.exitCode === null && this.activeRuns.has(requestId)) {
+        log(`Process did not exit after cancel [${requestId}] — detaching handle`)
+        this._finishedRuns.set(requestId, handle)
+        this.activeRuns.delete(requestId)
+        this.emit('exit', requestId, 0, 'SIGINT', handle.sessionId)
+        setTimeout(() => this._finishedRuns.delete(requestId), 5000)
       }
     }, 5000)
 

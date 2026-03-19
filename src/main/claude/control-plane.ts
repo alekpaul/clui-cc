@@ -3,6 +3,7 @@ import { RunManager } from './run-manager'
 import { PtyRunManager } from './pty-run-manager'
 import { PermissionServer, maskSensitiveFields } from '../hooks/permission-server'
 import type { HookToolRequest, PermissionOption } from '../hooks/permission-server'
+import { DevServerManager } from '../dev-server-manager'
 import { log as _log } from '../logger'
 import type {
   TabStatus,
@@ -77,6 +78,10 @@ export class ControlPlane extends EventEmitter {
   private planMode = false
   /** Resolves when the permission server is ready (or failed). Dispatch awaits this. */
   private hookServerReady: Promise<void>
+  /** Tracks dev servers spawned by Claude (port polling, PID discovery) */
+  readonly devServerManager: DevServerManager
+  /** Tracks the current Bash command per request (for dev server detection) */
+  private currentBashCommand = new Map<string, string>()
 
   constructor(interactivePty = false) {
     super()
@@ -84,6 +89,7 @@ export class ControlPlane extends EventEmitter {
     this.runManager = new RunManager()
     this.ptyRunManager = new PtyRunManager()
     this.permissionServer = new PermissionServer()
+    this.devServerManager = new DevServerManager()
 
     // Start the permission hook server. _dispatch awaits hookServerReady
     // so early prompts don't silently fall back to the --allowedTools path.
@@ -167,11 +173,32 @@ export class ControlPlane extends EventEmitter {
         return
       }
 
+      // Track current Bash command for dev server attribution
+      if (event.type === 'tool_call' && event.toolName === 'Bash') {
+        this.currentBashCommand.set(requestId, '')
+      }
+      if (event.type === 'tool_call_update' && this.currentBashCommand.has(requestId)) {
+        this.currentBashCommand.set(requestId, (this.currentBashCommand.get(requestId) || '') + event.partialInput)
+      }
+      if (event.type === 'tool_call_complete') {
+        // Keep the command around until the text response scans it
+      }
+
+      // Scan text for localhost URLs → detect dev servers
+      if (event.type === 'text_chunk') {
+        const cmd = this.currentBashCommand.get(requestId) || null
+        const detected = this.devServerManager.detectFromText(event.text, tabId, cmd)
+        for (const server of detected) {
+          this.emit('event', tabId, { type: 'dev_server_detected', server } as NormalizedEvent)
+        }
+      }
+
       this.emit('event', tabId, event)
     })
 
     this.runManager.on('exit', (requestId: string, code: number | null, signal: string | null, sessionId: string | null) => {
-      // Clean up per-run token
+      // Clean up per-run tracking
+      this.currentBashCommand.delete(requestId)
       const runToken = this.runTokens.get(requestId)
       if (runToken) {
         this.permissionServer.unregisterRun(runToken)
@@ -689,10 +716,24 @@ export class ControlPlane extends EventEmitter {
 
   /**
    * Cancel active run on a tab (by tabId instead of requestId).
+   * Also clears any queued requests so they don't auto-start after the cancel.
    */
   cancelTab(tabId: string): boolean {
     const tab = this.tabs.get(tabId)
     if (!tab?.activeRequestId) return false
+
+    // Clear queued requests for this tab — the user explicitly cancelled,
+    // so queued follow-up prompts should not auto-dispatch after the kill.
+    this.requestQueue = this.requestQueue.filter((r) => {
+      if (r.tabId === tabId) {
+        const reason = new Error('Cancelled by user')
+        r.reject(reason)
+        for (const w of r.extraWaiters) w.reject(reason)
+        return false
+      }
+      return true
+    })
+
     return this.cancel(tab.activeRequestId)
   }
 
@@ -832,6 +873,7 @@ export class ControlPlane extends EventEmitter {
 
   shutdown(): void {
     log('Shutting down control plane')
+    this.devServerManager.shutdown()
     this.permissionServer.stop()
     for (const [tabId] of this.tabs) {
       this.closeTab(tabId)

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC } from '../shared/types'
-import type { RunOptions, NormalizedEvent, HealthReport, EnrichedError, Attachment, SessionMeta, CatalogPlugin, SessionLoadMessage } from '../shared/types'
+import type { RunOptions, NormalizedEvent, HealthReport, EnrichedError, Attachment, ElementInspection, SessionMeta, CatalogPlugin, SessionLoadMessage, DevServer } from '../shared/types'
 
 export interface CluiAPI {
   // ─── Request-response (renderer → main) ───
@@ -17,9 +17,9 @@ export interface CluiAPI {
   openExternal(url: string): Promise<boolean>
   openInTerminal(sessionId: string | null, projectPath?: string): Promise<boolean>
   attachFiles(): Promise<Attachment[] | null>
+  inspectElement(url: string): Promise<ElementInspection | null>
   takeScreenshot(): Promise<Attachment | null>
   pasteImage(dataUrl: string): Promise<Attachment | null>
-  processDroppedFiles(filePaths: string[]): Promise<Attachment[]>
   transcribeAudio(audioBase64: string): Promise<{ error: string | null; transcript: string | null }>
   getDiagnostics(): Promise<any>
   respondPermission(tabId: string, questionId: string, optionId: string): Promise<boolean>
@@ -55,6 +55,11 @@ export interface CluiAPI {
   onSkillStatus(callback: (status: { name: string; state: string; error?: string; reason?: string }) => void): () => void
   onWindowShown(callback: () => void): () => void
   onFinderFolderDetected(callback: (folder: string) => void): () => void
+  onElementSelected(callback: (result: ElementInspection) => void): () => void
+
+  // Dev server lifecycle
+  stopDevServer(serverId: string): Promise<boolean>
+  onDevServerStatus(callback: (server: DevServer) => void): () => void
 }
 
 const api: CluiAPI = {
@@ -72,9 +77,9 @@ const api: CluiAPI = {
   openExternal: (url) => ipcRenderer.invoke(IPC.OPEN_EXTERNAL, url),
   openInTerminal: (sessionId, projectPath) => ipcRenderer.invoke(IPC.OPEN_IN_TERMINAL, { sessionId, projectPath }),
   attachFiles: () => ipcRenderer.invoke(IPC.ATTACH_FILES),
+  inspectElement: (url) => ipcRenderer.invoke(IPC.INSPECT_ELEMENT, url),
   takeScreenshot: () => ipcRenderer.invoke(IPC.TAKE_SCREENSHOT),
   pasteImage: (dataUrl) => ipcRenderer.invoke(IPC.PASTE_IMAGE, dataUrl),
-  processDroppedFiles: (filePaths) => ipcRenderer.invoke(IPC.PROCESS_DROPPED_FILES, filePaths),
   transcribeAudio: (audioBase64) => ipcRenderer.invoke(IPC.TRANSCRIBE_AUDIO, audioBase64),
   getDiagnostics: () => ipcRenderer.invoke(IPC.GET_DIAGNOSTICS),
   respondPermission: (tabId, questionId, optionId) =>
@@ -155,6 +160,20 @@ const api: CluiAPI = {
     const handler = (_e: Electron.IpcRendererEvent, folder: string) => callback(folder)
     ipcRenderer.on(IPC.FINDER_FOLDER_DETECTED, handler)
     return () => ipcRenderer.removeListener(IPC.FINDER_FOLDER_DETECTED, handler)
+  },
+
+  onElementSelected: (callback) => {
+    const handler = (_e: Electron.IpcRendererEvent, result: ElementInspection) => callback(result)
+    ipcRenderer.on(IPC.ELEMENT_SELECTED, handler)
+    return () => ipcRenderer.removeListener(IPC.ELEMENT_SELECTED, handler)
+  },
+
+  // Dev server lifecycle
+  stopDevServer: (serverId) => ipcRenderer.invoke(IPC.STOP_DEV_SERVER, serverId),
+  onDevServerStatus: (callback) => {
+    const handler = (_e: Electron.IpcRendererEvent, server: DevServer) => callback(server)
+    ipcRenderer.on(IPC.DEV_SERVER_STATUS, handler)
+    return () => ipcRenderer.removeListener(IPC.DEV_SERVER_STATUS, handler)
   },
 }
 

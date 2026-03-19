@@ -92,6 +92,8 @@ input::placeholder {
 .prose-cloud a {
   color: var(--clui-accent);
   text-decoration: none;
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 .prose-cloud a:hover {
   text-decoration: underline;

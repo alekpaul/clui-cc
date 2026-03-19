@@ -38,6 +38,7 @@ export class ProcessManager extends EventEmitter {
   private findClaudeBinary(): string {
     // Try common locations
     const candidates = [
+      join(homedir(), '.local/bin/claude'),
       '/usr/local/bin/claude',
       '/opt/homebrew/bin/claude',
       join(homedir(), '.npm-global/bin/claude'),

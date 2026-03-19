@@ -141,6 +141,39 @@ export interface Attachment {
   size?: number
 }
 
+/** Dev server tracked by port polling after Claude starts a dev server. */
+export interface DevServer {
+  id: string
+  tabId: string
+  url: string
+  port: number
+  status: 'alive' | 'dead' | 'unknown'
+  detectedAt: number
+  pid: number | null
+  command: string | null
+}
+
+/** Element selected via the browser inspector. */
+export interface ElementInspection {
+  url: string
+  tagName: string
+  id: string
+  classes: string[]
+  selector: string
+  /** Trimmed outerHTML (max 800 chars) */
+  outerHTML: string
+  /** Trimmed visible text (max 200 chars) */
+  innerText: string
+  /** React component info if detected */
+  reactComponent?: {
+    name: string
+    file?: string | null
+    line?: number | null
+    propKeys: string[]
+  }
+  timestamp: number
+}
+
 export interface TabState {
   id: string
   claudeSessionId: string | null
@@ -170,6 +203,10 @@ export interface TabState {
   hasChosenDirectory: boolean
   /** Extra directories accessible via --add-dir (session-preserving) */
   additionalDirs: string[]
+  /** Element selected via browser inspector — auto-prepended to next prompt */
+  elementContext: ElementInspection | null
+  /** Dev servers spawned during this tab's conversation */
+  devServers: DevServer[]
 }
 
 export interface Message {
@@ -205,6 +242,7 @@ export type NormalizedEvent =
   | { type: 'rate_limit'; status: string; resetsAt: number; rateLimitType: string }
   | { type: 'usage'; usage: UsageData }
   | { type: 'permission_request'; questionId: string; toolName: string; toolDescription?: string; toolInput?: Record<string, unknown>; options: Array<{ id: string; label: string; kind?: string }> }
+  | { type: 'dev_server_detected'; server: DevServer }
 
 // ─── Run Options ───
 
@@ -313,10 +351,10 @@ export const IPC = {
   OPEN_EXTERNAL: 'clui:open-external',
   OPEN_IN_TERMINAL: 'clui:open-in-terminal',
   ATTACH_FILES: 'clui:attach-files',
+  INSPECT_ELEMENT: 'clui:inspect-element',
   TAKE_SCREENSHOT: 'clui:take-screenshot',
   TRANSCRIBE_AUDIO: 'clui:transcribe-audio',
   PASTE_IMAGE: 'clui:paste-image',
-  PROCESS_DROPPED_FILES: 'clui:process-dropped-files',
   GET_DIAGNOSTICS: 'clui:get-diagnostics',
   RESPOND_PERMISSION: 'clui:respond-permission',
   INIT_SESSION: 'clui:init-session',
@@ -369,6 +407,13 @@ export const IPC = {
 
   // Plan mode
   SET_PLAN_MODE: 'clui:set-plan-mode',
+
+  // Element inspector
+  ELEMENT_SELECTED: 'clui:element-selected',
+
+  // Dev server lifecycle
+  DEV_SERVER_STATUS: 'clui:dev-server-status',
+  STOP_DEV_SERVER: 'clui:stop-dev-server',
 
   // Legacy (kept for backward compat during migration)
   STREAM_EVENT: 'clui:stream-event',

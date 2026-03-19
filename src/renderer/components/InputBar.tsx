@@ -1,6 +1,6 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Microphone, ArrowUp, SpinnerGap, X, Check } from '@phosphor-icons/react'
+import { Microphone, ArrowUp, SpinnerGap, X, Check, CursorClick } from '@phosphor-icons/react'
 import { useSessionStore, AVAILABLE_MODELS } from '../stores/sessionStore'
 import { AttachmentChips } from './AttachmentChips'
 import { SlashCommandMenu, getFilteredCommandsWithExtras, type SlashCommand } from './SlashCommandMenu'
@@ -22,6 +22,10 @@ export function InputBar() {
   const [input, setInput] = useState('')
   const [voiceState, setVoiceState] = useState<VoiceState>('idle')
   const [voiceError, setVoiceError] = useState<string | null>(null)
+  const [isInspecting, setIsInspecting] = useState(false)
+  const [inspectUrl, setInspectUrl] = useState('')
+  const [showInspectInput, setShowInspectInput] = useState(false)
+  const inspectUrlRef = useRef<HTMLInputElement>(null)
   const [slashFilter, setSlashFilter] = useState<string | null>(null)
   const [slashIndex, setSlashIndex] = useState(0)
   const [isMultiLine, setIsMultiLine] = useState(false)
@@ -37,6 +41,7 @@ export function InputBar() {
   const addSystemMessage = useSessionStore((s) => s.addSystemMessage)
   const addAttachments = useSessionStore((s) => s.addAttachments)
   const removeAttachment = useSessionStore((s) => s.removeAttachment)
+  const setElementContext = useSessionStore((s) => s.setElementContext)
 
   const setPreferredModel = useSessionStore((s) => s.setPreferredModel)
   const staticInfo = useSessionStore((s) => s.staticInfo)
@@ -375,7 +380,50 @@ export function InputBar() {
     else if (voiceState === 'idle') void startRecording()
   }, [voiceState, startRecording, stopRecording])
 
+  // ─── Inspector ───
+  useEffect(() => {
+    return window.clui.onElementSelected((result) => {
+      setElementContext(result)
+    })
+  }, [setElementContext])
+
+  // Listen for "inspect this URL" events from ConversationView link arrows
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const url = (e as CustomEvent<string>).detail
+      if (!url) return
+      setInspectUrl(url)
+      setShowInspectInput(true)
+      requestAnimationFrame(() => inspectUrlRef.current?.focus())
+    }
+    window.addEventListener('clui:inspect-url', handler)
+    return () => window.removeEventListener('clui:inspect-url', handler)
+  }, [])
+
+  const handleInspectToggle = useCallback(() => {
+    if (showInspectInput) {
+      setShowInspectInput(false)
+    } else {
+      setShowInspectInput(true)
+      requestAnimationFrame(() => inspectUrlRef.current?.focus())
+    }
+  }, [showInspectInput])
+
+  const handleInspectLaunch = useCallback(async () => {
+    const url = inspectUrl.trim()
+    if (!url) return
+    setShowInspectInput(false)
+    setIsInspecting(true)
+    try {
+      // Resolves only when the inspector window is closed
+      await window.clui.inspectElement(url)
+    } finally {
+      setIsInspecting(false)
+    }
+  }, [inspectUrl])
+
   const hasAttachments = attachments.length > 0
+  const elementContext = tab?.elementContext ?? null
 
   return (
     <div ref={wrapperRef} data-clui-ui className="flex flex-col w-full relative">
@@ -389,6 +437,92 @@ export function InputBar() {
             anchorRect={wrapperRef.current?.getBoundingClientRect() ?? null}
             extraCommands={skillCommands}
           />
+        )}
+      </AnimatePresence>
+
+      {/* Inspect URL input row */}
+      <AnimatePresence>
+        {showInspectInput && (
+          <motion.div
+            key="inspect-input"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.15 }}
+            className="flex items-center gap-2 overflow-hidden"
+            style={{ paddingTop: 6 }}
+          >
+            <CursorClick size={13} style={{ color: colors.accent, flexShrink: 0 }} />
+            <input
+              ref={inspectUrlRef}
+              type="text"
+              value={inspectUrl}
+              onChange={(e) => setInspectUrl(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); void handleInspectLaunch() }
+                if (e.key === 'Escape') { e.preventDefault(); setShowInspectInput(false) }
+              }}
+              placeholder="https://localhost:3000  ·  Enter to launch"
+              className="flex-1 bg-transparent text-[12px]"
+              style={{ color: colors.textPrimary, outline: 'none', border: 'none' }}
+            />
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void handleInspectLaunch()}
+              disabled={!inspectUrl.trim()}
+              className="px-3 py-1 rounded-full text-[11px] font-medium"
+              style={{
+                background: inspectUrl.trim() ? colors.accent : colors.surfaceHover,
+                color: inspectUrl.trim() ? colors.textOnAccent : colors.textTertiary,
+                border: 'none',
+                flexShrink: 0,
+              }}
+            >
+              Launch
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Element context chip */}
+      <AnimatePresence>
+        {elementContext && (
+          <motion.div
+            key="element-ctx"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.15 }}
+            className="flex items-center gap-1.5 overflow-hidden"
+            style={{ paddingTop: 5 }}
+          >
+            <div
+              className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium flex-1 min-w-0"
+              style={{ background: colors.accentLight || colors.surfaceHover, color: colors.accent }}
+            >
+              <CursorClick size={11} style={{ flexShrink: 0 }} />
+              <span className="truncate">
+                {elementContext.reactComponent
+                  ? elementContext.reactComponent.name
+                  : `<${elementContext.tagName}${elementContext.id ? '#' + elementContext.id : ''}>`}
+              </span>
+              {elementContext.reactComponent?.file && (
+                <span className="opacity-60 truncate shrink-0">
+                  {elementContext.reactComponent.file.split('/').slice(-2).join('/')}
+                  {elementContext.reactComponent.line ? ':' + elementContext.reactComponent.line : ''}
+                </span>
+              )}
+            </div>
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setElementContext(null)}
+              className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0"
+              style={{ background: 'transparent', border: 'none', color: colors.textTertiary }}
+              title="Clear element context"
+            >
+              <X size={11} />
+            </button>
+          </motion.div>
         )}
       </AnimatePresence>
 
@@ -434,6 +568,16 @@ export function InputBar() {
             />
 
             <div className="flex items-center justify-end gap-1" style={{ marginTop: 0, paddingBottom: 4 }}>
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={handleInspectToggle}
+                disabled={isConnecting || isInspecting}
+                className="w-9 h-9 rounded-full flex items-center justify-center transition-colors"
+                style={{ background: colors.micBg, color: (showInspectInput || isInspecting || elementContext) ? colors.accent : colors.micColor }}
+                title="Inspect element"
+              >
+                {isInspecting ? <SpinnerGap size={16} className="animate-spin" /> : <CursorClick size={16} />}
+              </button>
               <VoiceButtons
                 voiceState={voiceState}
                 isConnecting={isConnecting}
@@ -493,6 +637,16 @@ export function InputBar() {
             />
 
             <div className="flex items-center gap-1 shrink-0 ml-2">
+              <button
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={handleInspectToggle}
+                disabled={isConnecting || isInspecting}
+                className="w-9 h-9 rounded-full flex items-center justify-center transition-colors"
+                style={{ background: colors.micBg, color: (showInspectInput || isInspecting || elementContext) ? colors.accent : colors.micColor }}
+                title="Inspect element"
+              >
+                {isInspecting ? <SpinnerGap size={16} className="animate-spin" /> : <CursorClick size={16} />}
+              </button>
               <VoiceButtons
                 voiceState={voiceState}
                 isConnecting={isConnecting}

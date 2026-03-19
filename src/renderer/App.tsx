@@ -321,53 +321,6 @@ export default function App() {
     }
   }, [])
 
-  const [isDragOver, setIsDragOver] = useState(false)
-  const dragCounterRef = useRef(0)
-
-  const handleDragEnter = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    dragCounterRef.current++
-    if (e.dataTransfer.types.includes('Files')) {
-      setIsDragOver(true)
-    }
-  }, [])
-
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    dragCounterRef.current--
-    if (dragCounterRef.current === 0) {
-      setIsDragOver(false)
-    }
-  }, [])
-
-  const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    if (e.dataTransfer.types.includes('Files')) {
-      e.dataTransfer.dropEffect = 'copy'
-    }
-  }, [])
-
-  const handleDrop = useCallback(async (e: React.DragEvent) => {
-    e.preventDefault()
-    e.stopPropagation()
-    dragCounterRef.current = 0
-    setIsDragOver(false)
-
-    const files = Array.from(e.dataTransfer.files)
-    if (files.length === 0) return
-
-    const filePaths = files.map((f) => f.path).filter(Boolean)
-    if (filePaths.length === 0) return
-
-    const attachments = await window.clui.processDroppedFiles(filePaths)
-    if (attachments && attachments.length > 0) {
-      addAttachments(attachments)
-    }
-  }, [addAttachments])
-
   const isExpanded = useSessionStore((s) => s.isExpanded)
   const marketplaceOpen = useSessionStore((s) => s.marketplaceOpen)
   const isRunning = activeTabStatus === 'running' || activeTabStatus === 'connecting'
@@ -563,52 +516,9 @@ export default function App() {
             <div
               data-clui-ui
               className="glass-surface w-full"
-              onDragEnter={handleDragEnter}
-              onDragLeave={handleDragLeave}
-              onDragOver={handleDragOver}
-              onDrop={handleDrop}
-              style={{
-                minHeight: 50,
-                borderRadius: 25,
-                padding: '0 6px 0 16px',
-                background: colors.inputPillBg,
-                position: 'relative',
-                transition: 'border-color 0.15s ease',
-                ...(isDragOver ? {
-                  borderColor: colors.accent,
-                  borderWidth: 2,
-                  borderStyle: 'dashed',
-                } : {}),
-              }}
+              style={{ minHeight: 50, borderRadius: 25, padding: '0 6px 0 16px', background: colors.inputPillBg }}
             >
               <InputBar />
-              <AnimatePresence>
-                {isDragOver && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.12 }}
-                    style={{
-                      position: 'absolute',
-                      inset: 0,
-                      borderRadius: 25,
-                      background: `${colors.accent}18`,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 8,
-                      pointerEvents: 'none',
-                      zIndex: 10,
-                    }}
-                  >
-                    <Paperclip size={18} weight="bold" style={{ color: colors.accent }} />
-                    <span style={{ color: colors.accent, fontSize: 13, fontWeight: 600 }}>
-                      Drop here
-                    </span>
-                  </motion.div>
-                )}
-              </AnimatePresence>
             </div>
           </div>
         </div>
