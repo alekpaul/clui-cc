@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, screen, globalShortcut, Tray, Menu
 import { join } from 'path'
 import { existsSync, readdirSync, statSync, createReadStream } from 'fs'
 import { createInterface } from 'readline'
-import { execFile } from 'child_process'
+import { exec, execFile } from 'child_process'
 import { homedir } from 'os'
 import { ControlPlane } from './claude/control-plane'
 import { launchBrowserInspector } from './browser-inspector'
@@ -1055,6 +1055,113 @@ nativeTheme.on('updated', () => {
   broadcast(IPC.THEME_CHANGED, nativeTheme.shouldUseDarkColors)
 })
 
+// ─── Dependency Provisioning ───
+
+function ensureDependencies(): void {
+  // Delay to let the renderer mount and subscribe to IPC events
+  setTimeout(() => ensureDependenciesImpl(), 3000)
+}
+
+function ensureDependenciesImpl(): void {
+  // Check if whisper-cli binary exists at known paths
+  const whisperCandidates = [
+    '/opt/homebrew/bin/whisper-cli',
+    '/usr/local/bin/whisper-cli',
+    '/opt/homebrew/bin/whisper',
+    '/usr/local/bin/whisper',
+    join(homedir(), '.local/bin/whisper'),
+  ]
+
+  const whisperExists = whisperCandidates.some((c: string) => existsSync(c))
+  if (whisperExists) {
+    log('Whisper binary found — skipping install')
+    ensureWhisperModel()
+    return
+  }
+
+  // Shell lookup (async to avoid EPIPE in Electron main process)
+  exec(
+    '/bin/zsh -lc "whence -p whisper-cli 2>/dev/null || whence -p whisper 2>/dev/null"',
+    { encoding: 'utf-8', timeout: 5000 },
+    (lookupErr, stdout) => {
+      const found = (stdout || '').trim()
+      if (!lookupErr && found) {
+        log(`Whisper found via shell: ${found}`)
+        ensureWhisperModel()
+        return
+      }
+
+      log('Whisper not found — starting auto-install via brew')
+      broadcast(IPC.DEP_STATUS, { name: 'whisper-cpp', state: 'installing' })
+
+      exec(
+        '/bin/zsh -lc "brew install whisper-cpp"',
+        { timeout: 300000 },
+        (err: Error | null, _stdout: string, stderr: string) => {
+          if (err) {
+            log(`Whisper install failed: ${err.message}`)
+            broadcast(IPC.DEP_STATUS, {
+              name: 'whisper-cpp',
+              state: 'failed',
+              error: stderr?.split('\n').filter(Boolean).pop() || err.message,
+            })
+            return
+          }
+
+          log('Whisper installed successfully')
+          broadcast(IPC.DEP_STATUS, { name: 'whisper-cpp', state: 'installed' })
+
+          // Also ensure a model file exists
+          ensureWhisperModel()
+        },
+      )
+    },
+  )
+}
+
+function ensureWhisperModel(): void {
+  const modelCandidates = [
+    join(homedir(), '.local/share/whisper/ggml-tiny.bin'),
+    join(homedir(), '.local/share/whisper/ggml-base.bin'),
+    '/opt/homebrew/share/whisper-cpp/models/ggml-tiny.bin',
+    '/opt/homebrew/share/whisper-cpp/models/ggml-base.bin',
+    join(homedir(), '.local/share/whisper/ggml-tiny.en.bin'),
+    join(homedir(), '.local/share/whisper/ggml-base.en.bin'),
+    '/opt/homebrew/share/whisper-cpp/models/ggml-tiny.en.bin',
+    '/opt/homebrew/share/whisper-cpp/models/ggml-base.en.bin',
+  ]
+
+  if (modelCandidates.some((m: string) => existsSync(m))) {
+    log('Whisper model found — skipping download')
+    return
+  }
+
+  const modelDir = join(homedir(), '.local/share/whisper')
+  const modelPath = join(modelDir, 'ggml-tiny.bin')
+  const modelUrl = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin'
+
+  log('Whisper model not found — downloading ggml-tiny.bin')
+  broadcast(IPC.DEP_STATUS, { name: 'whisper-model', state: 'installing' })
+
+  exec(
+    `mkdir -p "${modelDir}" && curl -L -o "${modelPath}" "${modelUrl}"`,
+    { timeout: 120000 },
+    (err: Error | null) => {
+      if (err) {
+        log(`Whisper model download failed: ${err.message}`)
+        broadcast(IPC.DEP_STATUS, {
+          name: 'whisper-model',
+          state: 'failed',
+          error: err.message,
+        })
+        return
+      }
+      log('Whisper model downloaded successfully')
+      broadcast(IPC.DEP_STATUS, { name: 'whisper-model', state: 'installed' })
+    },
+  )
+}
+
 // ─── App Lifecycle ───
 
 app.whenReady().then(() => {
@@ -1072,6 +1179,9 @@ app.whenReady().then(() => {
   }).catch((err: Error) => log(`Skill provisioning error: ${err.message}`))
 
   createWindow()
+
+  // Dependency provisioning — auto-install whisper-cpp if missing (deferred to let renderer mount)
+  ensureDependencies()
   snapshotWindowState('after createWindow')
 
   if (SPACES_DEBUG) {

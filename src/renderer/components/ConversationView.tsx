@@ -739,6 +739,42 @@ const AssistantMessage = React.memo(function AssistantMessage({
           </span>
         )
       }
+      // Detect localhost URLs in inline code and make them interactive
+      if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i.test(text)) {
+        return (
+          <span className="inline-flex items-center gap-0.5">
+            <code
+              className="cursor-pointer transition-colors"
+              style={{ color: colors.accent }}
+              title="Open in browser"
+              onClick={() => window.clui.openExternal(text)}
+            >
+              {text}
+            </code>
+            <button
+              type="button"
+              className="inline-flex items-center justify-center cursor-pointer"
+              style={{
+                color: colors.accent,
+                background: 'transparent',
+                border: 'none',
+                padding: '0 2px',
+                verticalAlign: 'middle',
+                opacity: 0.7,
+              }}
+              title="Inspect element on this page"
+              onClick={(e) => {
+                e.stopPropagation()
+                window.dispatchEvent(new CustomEvent('clui:inspect-url', { detail: text }))
+              }}
+              onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
+              onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.opacity = '0.7' }}
+            >
+              <CursorClick size={13} weight="bold" />
+            </button>
+          </span>
+        )
+      }
       return <code>{children}</code>
     },
     // Code blocks: add a "Run" button if the block contains a shell command

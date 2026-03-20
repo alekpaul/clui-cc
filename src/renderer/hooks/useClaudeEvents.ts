@@ -15,6 +15,7 @@ export function useClaudeEvents() {
   const handleError = useSessionStore((s) => s.handleError)
   const handleFinderFolder = useSessionStore((s) => s.handleFinderFolder)
   const updateDevServerStatus = useSessionStore((s) => s.updateDevServerStatus)
+  const addSystemMessage = useSessionStore((s) => s.addSystemMessage)
 
   // RAF batching for text_chunk events
   const chunkBufferRef = useRef<Map<string, string>>(new Map())
@@ -63,6 +64,26 @@ export function useClaudeEvents() {
       }
     })
 
+    const unsubDep = window.clui.onDepStatus((status) => {
+      if (status.name === 'whisper-cpp') {
+        if (status.state === 'installing') {
+          addSystemMessage('Setting up voice transcription (whisper-cpp)… this may take a minute.')
+        } else if (status.state === 'installed') {
+          addSystemMessage('Voice transcription ready!')
+        } else if (status.state === 'failed') {
+          addSystemMessage(`Failed to install whisper-cpp: ${status.error || 'unknown error'}. Install manually: brew install whisper-cpp`)
+        }
+      } else if (status.name === 'whisper-model') {
+        if (status.state === 'installing') {
+          addSystemMessage('Downloading whisper speech model…')
+        } else if (status.state === 'installed') {
+          addSystemMessage('Whisper model ready!')
+        } else if (status.state === 'failed') {
+          addSystemMessage(`Failed to download whisper model: ${status.error || 'unknown error'}`)
+        }
+      }
+    })
+
     const unsubFinder = window.clui.onFinderFolderDetected((folder) => {
       handleFinderFolder(folder)
     })
@@ -76,12 +97,13 @@ export function useClaudeEvents() {
       unsubStatus()
       unsubError()
       unsubSkill()
+      unsubDep()
       unsubFinder()
       unsubDevServer()
       if (rafIdRef.current) cancelAnimationFrame(rafIdRef.current)
       chunkBufferRef.current.clear()
     }
-  }, [handleNormalizedEvent, handleStatusChange, handleError, handleFinderFolder, updateDevServerStatus])
+  }, [handleNormalizedEvent, handleStatusChange, handleError, handleFinderFolder, updateDevServerStatus, addSystemMessage])
 
   // Note: window.clui.start() is called via sessionStore.initStaticInfo() in App.tsx.
   // No duplicate call needed here.

@@ -1058,15 +1058,19 @@ export const useSessionStore = create<State>((set, get) => ({
 
           case 'rate_limit':
             if (event.status !== 'allowed') {
-              updated.messages = [
-                ...updated.messages,
-                {
-                  id: nextMsgId(),
-                  role: 'system',
-                  content: `Rate limited (${event.rateLimitType}). Resets at ${new Date(event.resetsAt).toLocaleTimeString()}.`,
-                  timestamp: Date.now(),
-                },
-              ]
+              const rlMsg = `Rate limited (${event.rateLimitType}). Resets at ${new Date(event.resetsAt).toLocaleTimeString()}.`
+              const alreadyShown = updated.messages.some((m) => m.role === 'system' && m.content === rlMsg)
+              if (!alreadyShown) {
+                updated.messages = [
+                  ...updated.messages,
+                  {
+                    id: nextMsgId(),
+                    role: 'system',
+                    content: rlMsg,
+                    timestamp: Date.now(),
+                  },
+                ]
+              }
             }
             break
 

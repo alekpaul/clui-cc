@@ -6,6 +6,9 @@ function log(msg: string): void {
   _log('BrowserInspector', msg)
 }
 
+/** Track active inspector window to prevent duplicates */
+let activeInspectorWindow: BrowserWindow | null = null
+
 // Injected once on page load. Uses console.log to send selections back to Node.
 // The picker re-arms automatically after each selection (1.5 s flash, then re-arm).
 // Esc cleans up the overlay but leaves the window open.
@@ -167,10 +170,21 @@ const PICKER_SCRIPT = `
 })()
 `
 
+/**
+ * Launch browser inspector window. Resolves once the window has opened and loaded
+ * (not when it closes). If an inspector window is already open, focuses it instead.
+ */
 export async function launchBrowserInspector(
   url: string,
   onSelect: (result: ElementInspection) => void,
 ): Promise<null> {
+  // If an inspector window is already open, focus it and return immediately
+  if (activeInspectorWindow && !activeInspectorWindow.isDestroyed()) {
+    log('Inspector already open — focusing existing window')
+    activeInspectorWindow.focus()
+    return null
+  }
+
   return new Promise((resolve) => {
     const win = new BrowserWindow({
       width: 1280,
@@ -182,6 +196,7 @@ export async function launchBrowserInspector(
       },
     })
 
+    activeInspectorWindow = win
     win.setMenuBarVisibility(false)
     log(`Launching inspector: ${url}`)
 
@@ -197,7 +212,10 @@ export async function launchBrowserInspector(
       }
     })
 
-    win.on('closed', () => resolve(null))
+    // Clear the active window reference when closed
+    win.on('closed', () => {
+      activeInspectorWindow = null
+    })
 
     const inject = async () => {
       await new Promise((r) => setTimeout(r, 250))
@@ -209,10 +227,22 @@ export async function launchBrowserInspector(
     }
 
     // Re-inject picker on every navigation (user navigates within the site)
-    win.webContents.on('did-finish-load', inject)
+    // Resolve the promise on first load (window is ready)
+    let resolved = false
+    win.webContents.on('did-finish-load', () => {
+      inject()
+      if (!resolved) {
+        resolved = true
+        resolve(null)
+      }
+    })
 
     win.loadURL(url).catch((err: Error) => {
       log(`Inspector load error: ${err.message}`)
+      if (!resolved) {
+        resolved = true
+        resolve(null)
+      }
     })
   })
 }

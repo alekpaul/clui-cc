@@ -415,7 +415,7 @@ export function InputBar() {
     setShowInspectInput(false)
     setIsInspecting(true)
     try {
-      // Resolves only when the inspector window is closed
+      // Resolves once the inspector window opens (or is focused if already open)
       await window.clui.inspectElement(url)
     } finally {
       setIsInspecting(false)

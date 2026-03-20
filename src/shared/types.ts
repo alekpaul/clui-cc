@@ -392,6 +392,9 @@ export const IPC = {
   // Skill provisioning (main → renderer)
   SKILL_STATUS: 'clui:skill-status',
 
+  // Dependency provisioning (main → renderer)
+  DEP_STATUS: 'clui:dep-status',
+
   // Theme
   GET_THEME: 'clui:get-theme',
   THEME_CHANGED: 'clui:theme-changed',

@@ -55,6 +55,7 @@ export interface CluiAPI {
   onSkillStatus(callback: (status: { name: string; state: string; error?: string; reason?: string }) => void): () => void
   onWindowShown(callback: () => void): () => void
   onFinderFolderDetected(callback: (folder: string) => void): () => void
+  onDepStatus(callback: (status: { name: string; state: string; error?: string }) => void): () => void
   onElementSelected(callback: (result: ElementInspection) => void): () => void
 
   // Dev server lifecycle
@@ -160,6 +161,12 @@ const api: CluiAPI = {
     const handler = (_e: Electron.IpcRendererEvent, folder: string) => callback(folder)
     ipcRenderer.on(IPC.FINDER_FOLDER_DETECTED, handler)
     return () => ipcRenderer.removeListener(IPC.FINDER_FOLDER_DETECTED, handler)
+  },
+
+  onDepStatus: (callback) => {
+    const handler = (_e: Electron.IpcRendererEvent, status: any) => callback(status)
+    ipcRenderer.on(IPC.DEP_STATUS, handler)
+    return () => ipcRenderer.removeListener(IPC.DEP_STATUS, handler)
   },
 
   onElementSelected: (callback) => {
